@@ -22,6 +22,7 @@ final class CaptureController: NSObject, ObservableObject {
     let settings = AppSettings.shared
 
     private let overlay = SelectionOverlayController()
+    private let recordingMask = RecordingMaskController()
     private var stream: SCStream?
     private var recordingOutput: SCRecordingOutput?
     private var timer: Timer?
@@ -76,6 +77,7 @@ final class CaptureController: NSObject, ObservableObject {
     func stop() {
         guard state == .recording, let stream else { return }
         state = .finishing
+        recordingMask.hide()
         timer?.invalidate()
         timer = nil
 
@@ -119,7 +121,13 @@ final class CaptureController: NSObject, ObservableObject {
                 throw CaptureError.displayNotFound
             }
 
-            let filter = SCContentFilter(display: display, excludingWindows: [])
+            // Exclude our own windows (recording mask, popover) from the
+            // capture — the mask dims the screen for the user but must never
+            // appear in the video.
+            let ownApps = content.applications.filter {
+                $0.processID == pid_t(ProcessInfo.processInfo.processIdentifier)
+            }
+            let filter = SCContentFilter(display: display, excludingApplications: ownApps, exceptingWindows: [])
             let scale = CGFloat(filter.pointPixelScale)
             let configuration = SCStreamConfiguration()
 
@@ -164,6 +172,9 @@ final class CaptureController: NSObject, ObservableObject {
                 self.errorMessage = nil
                 self.elapsed = 0
                 self.state = .recording
+                if let rect = areaViewRect {
+                    self.recordingMask.show(on: screen, selection: rect)
+                }
                 self.timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
                     guard let self, let startedAt = self.startedAt else { return }
                     self.elapsed = Date().timeIntervalSince(startedAt)
@@ -178,6 +189,7 @@ final class CaptureController: NSObject, ObservableObject {
     }
 
     private func finishSession() {
+        recordingMask.hide()
         stream = nil
         recordingOutput = nil
         startedAt = nil

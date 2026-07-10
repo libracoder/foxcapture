@@ -43,6 +43,55 @@ final class SelectionOverlayController {
     }
 }
 
+/// While recording an area, keeps the rest of the screen dimmed the same way
+/// the selection overlay does, with the recorded region punched out at full
+/// brightness behind a red border. Click-through, so apps underneath stay
+/// usable. FoxCapture's windows are excluded from the capture, so this mask
+/// never shows up in the video.
+final class RecordingMaskController {
+    private var window: NSWindow?
+
+    func show(on screen: NSScreen, selection: CGRect) {
+        hide()
+        let window = NSWindow(
+            contentRect: screen.frame,
+            styleMask: .borderless,
+            backing: .buffered,
+            defer: false
+        )
+        window.isOpaque = false
+        window.backgroundColor = .clear
+        window.level = .floating
+        window.ignoresMouseEvents = true
+        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        let view = RecordingMaskView()
+        view.selection = selection
+        window.contentView = view
+        window.orderFrontRegardless()
+        self.window = window
+    }
+
+    func hide() {
+        window?.orderOut(nil)
+        window = nil
+    }
+}
+
+final class RecordingMaskView: NSView {
+    var selection: CGRect = .zero
+
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor.black.withAlphaComponent(0.25).setFill()
+        bounds.fill()
+        selection.fill(using: .clear)
+        NSColor.systemRed.setStroke()
+        // Stroke sits fully outside the recorded region.
+        let border = NSBezierPath(rect: selection.insetBy(dx: -2, dy: -2))
+        border.lineWidth = 2
+        border.stroke()
+    }
+}
+
 final class SelectionWindow: NSWindow {
     let selectionView = SelectionView()
 
