@@ -14,6 +14,9 @@ final class WebcamController: NSObject, AVCaptureFileOutputRecordingDelegate {
     private var bubble: NSWindow?
     private var finishContinuation: CheckedContinuation<Void, Never>?
 
+    /// For capture-filter bookkeeping: the bubble must stay IN the video.
+    var bubbleWindowNumber: Int? { bubble?.windowNumber }
+
     /// Live preview bubble only — used as PiP during screen recordings.
     func startPreview(region: CGRect, diameter: CGFloat) async throws {
         try configureSession(withAudio: false)

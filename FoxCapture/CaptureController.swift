@@ -53,6 +53,9 @@ final class CaptureController: NSObject, ObservableObject {
     private var segmentIndex = 0
     private var finalURL: URL?
     private var accumulated: TimeInterval = 0
+    // Kept so resume can rebuild the capture from scratch.
+    private var sessionScreen: NSScreen?
+    private var sessionRect: CGRect?
 
     var store: CaptureStore { CaptureStore(directory: settings.outputDirectory) }
 
@@ -238,37 +241,34 @@ final class CaptureController: NSObject, ObservableObject {
                 } else {
                     try? await stream.stopCapture()
                 }
-                await self.assembleFinalFile()
             }
+            // Runs even when stopping while paused (stream already gone).
+            await self.assembleFinalFile()
             await self.webcam.stopAll()
             await MainActor.run { self.finishSession() }
         }
     }
 
-    /// Pauses without ending the session: the current segment file is
-    /// finalized while the stream keeps running (frames just go nowhere).
+    /// Pauses by fully stopping the capture: the current segment file is
+    /// finalized and every system recording indicator goes away — nothing is
+    /// being captured while paused.
     func pause() {
         guard state == .recording else { return }
         accumulated += startedAt.map { Date().timeIntervalSince($0) } ?? 0
         startedAt = nil
         state = .paused
 
-        if let stream, let output = recordingOutput {
+        if let stream {
+            self.stream = nil
             recordingOutput = nil
             Task {
                 await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
                     self.finishContinuation = continuation
-                    do {
-                        try stream.removeRecordingOutput(output)
-                    } catch {
-                        self.finishContinuation = nil
-                        continuation.resume()
-                        return
-                    }
                     DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
                         self.finishContinuation?.resume()
                         self.finishContinuation = nil
                     }
+                    Task { try? await stream.stopCapture() }
                 }
             }
         } else {
@@ -276,25 +276,36 @@ final class CaptureController: NSObject, ObservableObject {
         }
     }
 
+    /// Resumes by starting a fresh capture stream into a new segment file,
+    /// exactly like the initial start.
     func resume() {
         guard state == .paused else { return }
-        if let stream {
-            segmentIndex += 1
-            let url = segmentURL(segmentIndex)
-            let output = SCRecordingOutput(configuration: makeOutputConfiguration(url: url), delegate: self)
-            do {
-                try stream.addRecordingOutput(output)
-            } catch {
-                errorMessage = Self.describe(error)
-                return
+        if let sessionScreen {
+            NotificationCenter.default.post(name: .dismissPopover, object: nil)
+            Task {
+                do {
+                    let stream = try await buildStream(screen: sessionScreen, areaViewRect: sessionRect)
+                    segmentIndex += 1
+                    let url = segmentURL(segmentIndex)
+                    let output = SCRecordingOutput(configuration: makeOutputConfiguration(url: url), delegate: self)
+                    try stream.addRecordingOutput(output)
+                    try await stream.startCapture()
+                    self.stream = stream
+                    self.recordingOutput = output
+                    self.segments.append(url)
+                    await MainActor.run {
+                        self.startedAt = Date()
+                        self.state = .recording
+                    }
+                } catch {
+                    await MainActor.run { self.errorMessage = Self.describe(error) }
+                }
             }
-            segments.append(url)
-            recordingOutput = output
         } else {
             webcam.resumeRecording()
+            startedAt = Date()
+            state = .recording
         }
-        startedAt = Date()
-        state = .recording
     }
 
     private func beginWebcam(on screen: NSScreen) async {
@@ -364,43 +375,9 @@ final class CaptureController: NSObject, ObservableObject {
                 await MainActor.run { self.recordingMask.show(on: screen, selection: rect) }
             }
 
-            let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-            guard let displayID = screen.displayID,
-                  let display = content.displays.first(where: { $0.displayID == displayID }) else {
-                throw CaptureError.displayNotFound
-            }
-
-            // Exclude our windows that exist right now (the dim mask) — they
-            // are for the user's eyes, not the video.
-            let ownPID = pid_t(ProcessInfo.processInfo.processIdentifier)
-            let ownWindows = content.windows.filter { $0.owningApplication?.processID == ownPID }
-            let filter = SCContentFilter(display: display, excludingWindows: ownWindows)
-            let scale = settings.effectiveScale(pointPixelScale: CGFloat(filter.pointPixelScale))
-            let configuration = SCStreamConfiguration()
-
-            if let rect = areaViewRect {
-                let source = SelectionMath.sourceRect(fromViewRect: rect, screenHeight: screen.frame.height)
-                configuration.sourceRect = source
-                let size = SelectionMath.evenPixelSize(points: source.size, scale: scale)
-                configuration.width = size.width
-                configuration.height = size.height
-            } else {
-                let size = SelectionMath.evenPixelSize(
-                    points: CGSize(width: display.width, height: display.height), scale: scale
-                )
-                configuration.width = size.width
-                configuration.height = size.height
-            }
-
-            configuration.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(settings.fps))
-            configuration.showsCursor = settings.showsCursor
-            configuration.capturesAudio = settings.systemAudio
-            // Click sounds are played by this process; include our audio in
-            // the capture when they are on so viewers hear the clicks too.
-            configuration.excludesCurrentProcessAudio = !(settings.clickSoundLeft || settings.clickSoundRight)
-            configuration.captureMicrophone = settings.micEnabled
-            configuration.pixelFormat = kCVPixelFormatType_32BGRA
-            configuration.scalesToFit = true
+            sessionScreen = screen
+            sessionRect = areaViewRect
+            let stream = try await buildStream(screen: screen, areaViewRect: areaViewRect)
 
             sessionID = UUID()
             segmentIndex = 0
@@ -410,7 +387,6 @@ final class CaptureController: NSObject, ObservableObject {
             self.finalURL = finalURL
 
             let output = SCRecordingOutput(configuration: makeOutputConfiguration(url: firstSegment), delegate: self)
-            let stream = SCStream(filter: filter, configuration: configuration, delegate: self)
             try stream.addRecordingOutput(output)
             try await stream.startCapture()
 
@@ -481,6 +457,8 @@ final class CaptureController: NSObject, ObservableObject {
         accumulated = 0
         finalURL = nil
         segments = []
+        sessionScreen = nil
+        sessionRect = nil
         elapsed = 0
         state = .idle
         captures = store.list()
@@ -490,6 +468,56 @@ final class CaptureController: NSObject, ObservableObject {
             NSWorkspace.shared.activateFileViewerSelecting([url])
         }
         currentURL = nil
+    }
+
+    /// Builds a configured (not yet started) capture stream. Used for the
+    /// initial start and for every resume, so both behave identically.
+    /// Excludes FoxCapture's chrome (dim mask, control bar, popover) from the
+    /// video while keeping effect windows (webcam bubble, cursor highlight)
+    /// in it.
+    private func buildStream(screen: NSScreen, areaViewRect: CGRect?) async throws -> SCStream {
+        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+        guard let displayID = screen.displayID,
+              let display = content.displays.first(where: { $0.displayID == displayID }) else {
+            throw CaptureError.displayNotFound
+        }
+
+        let ownPID = pid_t(ProcessInfo.processInfo.processIdentifier)
+        let keepInVideo = Set(
+            [webcam.bubbleWindowNumber, cursorHighlight.windowNumber].compactMap { $0 }.map { CGWindowID($0) }
+        )
+        let excludedWindows = content.windows.filter {
+            $0.owningApplication?.processID == ownPID && !keepInVideo.contains($0.windowID)
+        }
+        let filter = SCContentFilter(display: display, excludingWindows: excludedWindows)
+        let scale = settings.effectiveScale(pointPixelScale: CGFloat(filter.pointPixelScale))
+        let configuration = SCStreamConfiguration()
+
+        if let rect = areaViewRect {
+            let source = SelectionMath.sourceRect(fromViewRect: rect, screenHeight: screen.frame.height)
+            configuration.sourceRect = source
+            let size = SelectionMath.evenPixelSize(points: source.size, scale: scale)
+            configuration.width = size.width
+            configuration.height = size.height
+        } else {
+            let size = SelectionMath.evenPixelSize(
+                points: CGSize(width: display.width, height: display.height), scale: scale
+            )
+            configuration.width = size.width
+            configuration.height = size.height
+        }
+
+        configuration.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(settings.fps))
+        configuration.showsCursor = settings.showsCursor
+        configuration.capturesAudio = settings.systemAudio
+        // Click sounds are played by this process; include our audio in the
+        // capture when they are on so viewers hear the clicks too.
+        configuration.excludesCurrentProcessAudio = !(settings.clickSoundLeft || settings.clickSoundRight)
+        configuration.captureMicrophone = settings.micEnabled
+        configuration.pixelFormat = kCVPixelFormatType_32BGRA
+        configuration.scalesToFit = true
+
+        return SCStream(filter: filter, configuration: configuration, delegate: self)
     }
 
     // MARK: - Segments

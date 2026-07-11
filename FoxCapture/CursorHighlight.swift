@@ -10,6 +10,9 @@ final class CursorHighlightController {
     private var timer: Timer?
     private var diameter: CGFloat = 40
 
+    /// For capture-filter bookkeeping: this window must stay IN the video.
+    var windowNumber: Int? { window?.windowNumber }
+
     func show(color: NSColor, sizePercent: Int, opacityPercent: Double) {
         hide()
         diameter = 40 * CGFloat(sizePercent) / 100
