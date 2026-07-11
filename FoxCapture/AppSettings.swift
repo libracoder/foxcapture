@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 import Combine
 
 final class AppSettings: ObservableObject {
@@ -25,6 +26,57 @@ final class AppSettings: ObservableObject {
     @Published var outputPath: String {
         didSet { UserDefaults.standard.set(outputPath, forKey: "outputPath") }
     }
+    @Published var resolution: String {
+        didSet { UserDefaults.standard.set(resolution, forKey: "resolution") }
+    }
+
+    // Mouse effects (visible in the video)
+    @Published var highlightEnabled: Bool {
+        didSet { UserDefaults.standard.set(highlightEnabled, forKey: "highlightEnabled") }
+    }
+    @Published var highlightColor: String {
+        didSet { UserDefaults.standard.set(highlightColor, forKey: "highlightColor") }
+    }
+    @Published var highlightSize: Int {
+        didSet { UserDefaults.standard.set(highlightSize, forKey: "highlightSize") }
+    }
+    @Published var highlightOpacity: Double {
+        didSet { UserDefaults.standard.set(highlightOpacity, forKey: "highlightOpacity") }
+    }
+    @Published var clickEffectEnabled: Bool {
+        didSet { UserDefaults.standard.set(clickEffectEnabled, forKey: "clickEffectEnabled") }
+    }
+    @Published var clickEffectSize: Int {
+        didSet { UserDefaults.standard.set(clickEffectSize, forKey: "clickEffectSize") }
+    }
+    @Published var clickLeftColor: String {
+        didSet { UserDefaults.standard.set(clickLeftColor, forKey: "clickLeftColor") }
+    }
+    @Published var clickRightColor: String {
+        didSet { UserDefaults.standard.set(clickRightColor, forKey: "clickRightColor") }
+    }
+
+    static let colorNames = ["yellow", "pink", "green", "red", "blue", "orange"]
+
+    static func color(named name: String) -> NSColor {
+        switch name {
+        case "pink": return .systemPink
+        case "green": return .systemGreen
+        case "red": return .systemRed
+        case "blue": return .systemBlue
+        case "orange": return .systemOrange
+        default: return .systemYellow
+        }
+    }
+
+    /// Output scale in pixels-per-point for the chosen resolution setting.
+    func effectiveScale(pointPixelScale: CGFloat) -> CGFloat {
+        switch resolution {
+        case "standard": return 1.0
+        case "half": return 0.5
+        default: return pointPixelScale // native Retina
+        }
+    }
 
     var outputDirectory: URL {
         if !outputPath.isEmpty {
@@ -43,7 +95,16 @@ final class AppSettings: ObservableObject {
             "systemAudio": true,
             "micEnabled": false,
             "revealAfterRecording": true,
-            "outputPath": ""
+            "outputPath": "",
+            "resolution": "native",
+            "highlightEnabled": true,
+            "highlightColor": "yellow",
+            "highlightSize": 100,
+            "highlightOpacity": 25.0,
+            "clickEffectEnabled": true,
+            "clickEffectSize": 100,
+            "clickLeftColor": "green",
+            "clickRightColor": "red"
         ])
         fps = defaults.integer(forKey: "fps")
         codec = defaults.string(forKey: "codec") ?? "h264"
@@ -52,5 +113,14 @@ final class AppSettings: ObservableObject {
         micEnabled = defaults.bool(forKey: "micEnabled")
         revealAfterRecording = defaults.bool(forKey: "revealAfterRecording")
         outputPath = defaults.string(forKey: "outputPath") ?? ""
+        resolution = defaults.string(forKey: "resolution") ?? "native"
+        highlightEnabled = defaults.bool(forKey: "highlightEnabled")
+        highlightColor = defaults.string(forKey: "highlightColor") ?? "yellow"
+        highlightSize = defaults.integer(forKey: "highlightSize")
+        highlightOpacity = defaults.double(forKey: "highlightOpacity")
+        clickEffectEnabled = defaults.bool(forKey: "clickEffectEnabled")
+        clickEffectSize = defaults.integer(forKey: "clickEffectSize")
+        clickLeftColor = defaults.string(forKey: "clickLeftColor") ?? "green"
+        clickRightColor = defaults.string(forKey: "clickRightColor") ?? "red"
     }
 }

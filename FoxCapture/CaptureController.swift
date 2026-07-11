@@ -23,6 +23,8 @@ final class CaptureController: NSObject, ObservableObject {
 
     private let overlay = SelectionOverlayController()
     private let recordingMask = RecordingMaskController()
+    private let cursorHighlight = CursorHighlightController()
+    private let clickEffects = ClickEffectController()
     private var stream: SCStream?
     private var recordingOutput: SCRecordingOutput?
     private var timer: Timer?
@@ -78,6 +80,8 @@ final class CaptureController: NSObject, ObservableObject {
         guard state == .recording, let stream else { return }
         state = .finishing
         recordingMask.hide()
+        cursorHighlight.hide()
+        clickEffects.stop()
         timer?.invalidate()
         timer = nil
 
@@ -115,20 +119,25 @@ final class CaptureController: NSObject, ObservableObject {
                 }
             }
 
+            // The mask goes up BEFORE the shareable-content fetch so it can be
+            // excluded from the capture by window ID. The cursor highlight is
+            // created after the capture starts, so it stays IN the video.
+            if let rect = areaViewRect {
+                await MainActor.run { self.recordingMask.show(on: screen, selection: rect) }
+            }
+
             let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
             guard let displayID = screen.displayID,
                   let display = content.displays.first(where: { $0.displayID == displayID }) else {
                 throw CaptureError.displayNotFound
             }
 
-            // Exclude our own windows (recording mask, popover) from the
-            // capture — the mask dims the screen for the user but must never
-            // appear in the video.
-            let ownApps = content.applications.filter {
-                $0.processID == pid_t(ProcessInfo.processInfo.processIdentifier)
-            }
-            let filter = SCContentFilter(display: display, excludingApplications: ownApps, exceptingWindows: [])
-            let scale = CGFloat(filter.pointPixelScale)
+            // Exclude our windows that exist right now (the dim mask) — they
+            // are for the user's eyes, not the video.
+            let ownPID = pid_t(ProcessInfo.processInfo.processIdentifier)
+            let ownWindows = content.windows.filter { $0.owningApplication?.processID == ownPID }
+            let filter = SCContentFilter(display: display, excludingWindows: ownWindows)
+            let scale = settings.effectiveScale(pointPixelScale: CGFloat(filter.pointPixelScale))
             let configuration = SCStreamConfiguration()
 
             if let rect = areaViewRect {
@@ -151,6 +160,7 @@ final class CaptureController: NSObject, ObservableObject {
             configuration.excludesCurrentProcessAudio = true
             configuration.captureMicrophone = settings.micEnabled
             configuration.pixelFormat = kCVPixelFormatType_32BGRA
+            configuration.scalesToFit = true
 
             let url = store.newCaptureURL()
             let outputConfiguration = SCRecordingOutputConfiguration()
@@ -172,8 +182,19 @@ final class CaptureController: NSObject, ObservableObject {
                 self.errorMessage = nil
                 self.elapsed = 0
                 self.state = .recording
-                if let rect = areaViewRect {
-                    self.recordingMask.show(on: screen, selection: rect)
+                if self.settings.highlightEnabled {
+                    self.cursorHighlight.show(
+                        color: AppSettings.color(named: self.settings.highlightColor),
+                        sizePercent: self.settings.highlightSize,
+                        opacityPercent: self.settings.highlightOpacity
+                    )
+                }
+                if self.settings.clickEffectEnabled {
+                    self.clickEffects.start(
+                        leftColor: AppSettings.color(named: self.settings.clickLeftColor),
+                        rightColor: AppSettings.color(named: self.settings.clickRightColor),
+                        sizePercent: self.settings.clickEffectSize
+                    )
                 }
                 self.timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
                     guard let self, let startedAt = self.startedAt else { return }
@@ -182,6 +203,7 @@ final class CaptureController: NSObject, ObservableObject {
             }
         } catch {
             await MainActor.run {
+                self.recordingMask.hide()
                 self.state = .idle
                 self.errorMessage = Self.describe(error)
             }
@@ -190,6 +212,8 @@ final class CaptureController: NSObject, ObservableObject {
 
     private func finishSession() {
         recordingMask.hide()
+        cursorHighlight.hide()
+        clickEffects.stop()
         stream = nil
         recordingOutput = nil
         startedAt = nil
