@@ -24,6 +24,10 @@ final class CaptureController: NSObject, ObservableObject {
     @Published var elapsed: TimeInterval = 0
     @Published var errorMessage: String?
     @Published var captures: [Capture] = []
+    /// Set while a screen/webcam recording waits for in-popover confirmation.
+    @Published var pendingTitle: String?
+
+    private var pending: PendingRecording?
 
     let settings = AppSettings.shared
 
@@ -52,7 +56,6 @@ final class CaptureController: NSObject, ObservableObject {
     /// Records the screen the pointer is currently on.
     func recordFullScreen() {
         guard state == .idle, let screen = screenUnderMouse() else { return }
-        NotificationCenter.default.post(name: .dismissPopover, object: nil)
         confirm(.screen(screen, areaViewRect: nil), title: "Record this screen?", selection: nil, on: screen)
     }
 
@@ -73,33 +76,53 @@ final class CaptureController: NSObject, ObservableObject {
     /// Records just the camera to a file, with the bubble as a self-monitor.
     func recordWebcam() {
         guard state == .idle, let screen = screenUnderMouse() else { return }
-        NotificationCenter.default.post(name: .dismissPopover, object: nil)
         confirm(.webcam(screen), title: "Record your webcam?", selection: nil, on: screen)
     }
 
-    /// Nothing records until the user confirms in the on-screen panel.
+    /// Nothing records until the user confirms. Area selections confirm in a
+    /// floating panel next to the selection (the popover is closed by then);
+    /// screen/webcam recordings confirm inside the popover before it closes.
     private func confirm(_ pending: PendingRecording, title: String, selection: CGRect?, on screen: NSScreen) {
         state = .confirming
+        self.pending = pending
         if let selection {
             recordingMask.show(on: screen, selection: selection)
+            pendingTitle = nil
+            confirmPanel.show(
+                on: screen,
+                nearSelection: selection,
+                title: title,
+                onStart: { [weak self] in self?.confirmStart() },
+                onCancel: { [weak self] in self?.cancelPending() }
+            )
+        } else {
+            pendingTitle = title
         }
-        confirmPanel.show(on: screen, nearSelection: selection, title: title, onStart: { [weak self] in
-            guard let self else { return }
-            self.confirmPanel.hide()
-            Task {
-                switch pending {
-                case .screen(let screen, let rect):
-                    await self.begin(screen: screen, areaViewRect: rect)
-                case .webcam(let screen):
-                    await self.beginWebcam(on: screen)
-                }
+    }
+
+    func confirmStart() {
+        guard state == .confirming, let pending else { return }
+        confirmPanel.hide()
+        pendingTitle = nil
+        self.pending = nil
+        NotificationCenter.default.post(name: .dismissPopover, object: nil)
+        Task {
+            switch pending {
+            case .screen(let screen, let rect):
+                await self.begin(screen: screen, areaViewRect: rect)
+            case .webcam(let screen):
+                await self.beginWebcam(on: screen)
             }
-        }, onCancel: { [weak self] in
-            guard let self else { return }
-            self.confirmPanel.hide()
-            self.recordingMask.hide()
-            self.state = .idle
-        })
+        }
+    }
+
+    func cancelPending() {
+        guard state == .confirming else { return }
+        confirmPanel.hide()
+        recordingMask.hide()
+        pending = nil
+        pendingTitle = nil
+        state = .idle
     }
 
     private func screenUnderMouse() -> NSScreen? {

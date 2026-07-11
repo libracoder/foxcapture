@@ -45,7 +45,26 @@ struct MainView: View {
 
     private var recordSection: some View {
         VStack(spacing: 10) {
-            if controller.state == .recording {
+            if let title = controller.pendingTitle {
+                HStack(spacing: 8) {
+                    Text(title)
+                        .font(.system(size: 12, weight: .medium))
+                    Spacer()
+                    Button("Cancel") { controller.cancelPending() }
+                        .keyboardShortcut(.cancelAction)
+                    Button(action: { controller.confirmStart() }) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "record.circle")
+                            Text("Start")
+                                .fontWeight(.semibold)
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.red)
+                    .keyboardShortcut(.defaultAction)
+                }
+                .font(.system(size: 12))
+            } else if controller.state == .recording {
                 Button(action: { controller.stop() }) {
                     HStack(spacing: 6) {
                         Image(systemName: "stop.fill")
@@ -118,8 +137,8 @@ struct MainView: View {
                     .font(.system(size: 10))
                     .foregroundColor(.secondary)
             }
-            if controller.state == .confirming {
-                Text("Confirm in the on-screen panel: Start Recording or Cancel (Esc).")
+            if controller.state == .confirming, controller.pendingTitle == nil {
+                Text("Confirm in the panel next to your selection: Start Recording or Cancel (Esc).")
                     .font(.system(size: 10))
                     .foregroundColor(.secondary)
             }

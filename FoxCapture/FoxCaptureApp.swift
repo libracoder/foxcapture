@@ -13,7 +13,7 @@ struct FoxCaptureApp: App {
     }
 }
 
-class AppDelegate: NSObject, NSApplicationDelegate {
+class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     var statusItem: NSStatusItem!
     var popover: NSPopover!
     var controller: CaptureController!
@@ -33,6 +33,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         popover = NSPopover()
+        popover.delegate = self
         popover.contentSize = NSSize(width: 380, height: 500)
         popover.behavior = .transient
         popover.animates = true
@@ -96,6 +97,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return String(format: "%d:%02d:%02d", hours, minutes, seconds)
         }
         return String(format: "%d:%02d", minutes, seconds)
+    }
+
+    func popoverDidClose(_ notification: Notification) {
+        // Dismissing the popover while an in-popover confirmation is pending
+        // cancels it; confirmed starts have already cleared pendingTitle.
+        if controller.state == .confirming, controller.pendingTitle != nil {
+            controller.cancelPending()
+        }
     }
 
     @objc func togglePopover() {
