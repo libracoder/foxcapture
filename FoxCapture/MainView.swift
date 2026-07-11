@@ -258,7 +258,7 @@ struct CaptureRow: View {
             }
             .buttonStyle(.plain)
             .font(.system(size: 10))
-            .help("Delete")
+            .help("Move to Trash")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)

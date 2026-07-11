@@ -96,11 +96,19 @@ final class CaptureStoreTests: XCTestCase {
         XCTAssertEqual(captures[0].fileSize, 2)
     }
 
-    func testDeleteRemovesFile() throws {
+    func testDeleteMovesFileToTrash() throws {
         let url = tempDir.appendingPathComponent("clip.mp4")
         try Data([1]).write(to: url)
         let capture = store.list()[0]
-        try store.delete(capture)
+
+        let trashedURL = try store.delete(capture)
+
         XCTAssertTrue(store.list().isEmpty)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+        // The file went to the Trash, not oblivion; clean it up.
+        if let trashedURL {
+            XCTAssertTrue(FileManager.default.fileExists(atPath: trashedURL.path))
+            try? FileManager.default.removeItem(at: trashedURL)
+        }
     }
 }

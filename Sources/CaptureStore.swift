@@ -52,7 +52,12 @@ public final class CaptureStore {
             .sorted { $0.createdAt > $1.createdAt }
     }
 
-    public func delete(_ capture: Capture) throws {
-        try FileManager.default.removeItem(at: capture.url)
+    /// Moves the recording to the Trash (recoverable) rather than deleting
+    /// it outright. Returns the item's new location in the Trash.
+    @discardableResult
+    public func delete(_ capture: Capture) throws -> URL? {
+        var trashedURL: NSURL?
+        try FileManager.default.trashItem(at: capture.url, resultingItemURL: &trashedURL)
+        return trashedURL as URL?
     }
 }
