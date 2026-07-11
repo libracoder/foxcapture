@@ -10,8 +10,14 @@ final class CaptureController: NSObject, ObservableObject {
     enum State: Equatable {
         case idle
         case selecting
+        case confirming
         case recording
         case finishing
+    }
+
+    private enum PendingRecording {
+        case screen(NSScreen, areaViewRect: CGRect?)
+        case webcam(NSScreen)
     }
 
     @Published var state: State = .idle
@@ -26,6 +32,7 @@ final class CaptureController: NSObject, ObservableObject {
     private let cursorHighlight = CursorHighlightController()
     private let clickEffects = ClickEffectController()
     private let webcam = WebcamController()
+    private let confirmPanel = ConfirmPanelController()
     private var stream: SCStream?
     private var recordingOutput: SCRecordingOutput?
     private var timer: Timer?
@@ -44,15 +51,9 @@ final class CaptureController: NSObject, ObservableObject {
 
     /// Records the screen the pointer is currently on.
     func recordFullScreen() {
-        guard state == .idle else { return }
-        let mouse = NSEvent.mouseLocation
-        let screen = NSScreen.screens.first { $0.frame.contains(mouse) } ?? NSScreen.main
-        guard let screen else {
-            errorMessage = "No screen found."
-            return
-        }
+        guard state == .idle, let screen = screenUnderMouse() else { return }
         NotificationCenter.default.post(name: .dismissPopover, object: nil)
-        Task { await begin(screen: screen, areaViewRect: nil) }
+        confirm(.screen(screen, areaViewRect: nil), title: "Record this screen?", selection: nil, on: screen)
     }
 
     func recordArea() {
@@ -65,15 +66,52 @@ final class CaptureController: NSObject, ObservableObject {
                 self.state = .idle
                 return
             }
-            Task { await self.begin(screen: screen, areaViewRect: rect) }
+            self.confirm(.screen(screen, areaViewRect: rect), title: "Record this area?", selection: rect, on: screen)
         }
+    }
+
+    /// Records just the camera to a file, with the bubble as a self-monitor.
+    func recordWebcam() {
+        guard state == .idle, let screen = screenUnderMouse() else { return }
+        NotificationCenter.default.post(name: .dismissPopover, object: nil)
+        confirm(.webcam(screen), title: "Record your webcam?", selection: nil, on: screen)
+    }
+
+    /// Nothing records until the user confirms in the on-screen panel.
+    private func confirm(_ pending: PendingRecording, title: String, selection: CGRect?, on screen: NSScreen) {
+        state = .confirming
+        if let selection {
+            recordingMask.show(on: screen, selection: selection)
+        }
+        confirmPanel.show(on: screen, nearSelection: selection, title: title, onStart: { [weak self] in
+            guard let self else { return }
+            self.confirmPanel.hide()
+            Task {
+                switch pending {
+                case .screen(let screen, let rect):
+                    await self.begin(screen: screen, areaViewRect: rect)
+                case .webcam(let screen):
+                    await self.beginWebcam(on: screen)
+                }
+            }
+        }, onCancel: { [weak self] in
+            guard let self else { return }
+            self.confirmPanel.hide()
+            self.recordingMask.hide()
+            self.state = .idle
+        })
+    }
+
+    private func screenUnderMouse() -> NSScreen? {
+        let mouse = NSEvent.mouseLocation
+        return NSScreen.screens.first { $0.frame.contains(mouse) } ?? NSScreen.main
     }
 
     func toggle() {
         switch state {
         case .idle: recordArea()
         case .recording: stop()
-        case .selecting, .finishing: break
+        case .selecting, .confirming, .finishing: break
         }
     }
 
@@ -104,14 +142,7 @@ final class CaptureController: NSObject, ObservableObject {
         }
     }
 
-    /// Records just the camera to a file, with the bubble as a self-monitor.
-    func recordWebcam() {
-        guard state == .idle else { return }
-        NotificationCenter.default.post(name: .dismissPopover, object: nil)
-        Task { await beginWebcam() }
-    }
-
-    private func beginWebcam() async {
+    private func beginWebcam(on screen: NSScreen) async {
         do {
             guard await AVCaptureDevice.requestAccess(for: .video) else {
                 throw CaptureError.cameraDenied
@@ -119,9 +150,6 @@ final class CaptureController: NSObject, ObservableObject {
             if settings.micEnabled {
                 _ = await AVCaptureDevice.requestAccess(for: .audio)
             }
-            let mouse = NSEvent.mouseLocation
-            let screen = NSScreen.screens.first { $0.frame.contains(mouse) } ?? NSScreen.main
-            guard let screen else { throw CaptureError.displayNotFound }
 
             let url = store.newCaptureURL(suffix: "Webcam", fileExtension: "mov")
             try await webcam.startRecording(

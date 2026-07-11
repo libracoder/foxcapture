@@ -67,7 +67,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         case .recording:
             button.image = Self.icon(named: "record.circle.fill", color: .systemRed)
             button.title = " " + Self.format(elapsed)
-        case .selecting, .finishing:
+        case .selecting, .confirming, .finishing:
             button.image = Self.icon(named: "rectangle.dashed")
             button.title = ""
         case .idle:

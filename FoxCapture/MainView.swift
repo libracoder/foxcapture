@@ -118,6 +118,11 @@ struct MainView: View {
                     .font(.system(size: 10))
                     .foregroundColor(.secondary)
             }
+            if controller.state == .confirming {
+                Text("Confirm in the on-screen panel: Start Recording or Cancel (Esc).")
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary)
+            }
             if controller.state == .finishing {
                 HStack(spacing: 6) {
                     ProgressView()
