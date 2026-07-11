@@ -527,7 +527,7 @@ final class CaptureController: NSObject, ObservableObject {
         for url in segments {
             let asset = AVURLAsset(url: url)
             guard let duration = try? await asset.load(.duration), duration > .zero else { continue }
-            try? composition.insertTimeRange(CMTimeRange(start: .zero, duration: duration), of: asset, at: cursor)
+            try? await composition.insertTimeRange(CMTimeRange(start: .zero, duration: duration), of: asset, at: cursor)
             cursor = CMTimeAdd(cursor, duration)
         }
         guard let session = AVAssetExportSession(asset: composition, presetName: AVAssetExportPresetPassthrough) else {
