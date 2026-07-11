@@ -22,6 +22,8 @@ struct SettingsView: View {
                     Divider()
                     webcamSection
                     Divider()
+                    shortcutSection
+                    Divider()
                     outputSection
                     Divider()
                     permissionsSection
@@ -273,6 +275,29 @@ struct SettingsView: View {
         .disabled(controller.state != .idle)
     }
 
+    private var shortcutSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Keyboard Shortcut")
+                .font(.system(size: 12, weight: .semibold))
+            HStack(spacing: 8) {
+                ShortcutRecorderField()
+                Picker("", selection: $settings.hotKeyAction) {
+                    Text("Record Screen").tag("screen")
+                    Text("Record Area").tag("area")
+                    Text("Record Webcam").tag("webcam")
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .frame(width: 140)
+            }
+            .font(.system(size: 11))
+            Text("Works system-wide: press once to start (no confirmation) and again to stop. Needs at least one modifier key (⌘ ⌥ ⌃). Press Delete while recording a shortcut to clear it.")
+                .font(.system(size: 10))
+                .foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
     private var outputSection: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Output Folder")
@@ -307,6 +332,50 @@ struct SettingsView: View {
                 .font(.system(size: 10))
                 .foregroundColor(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private struct ShortcutRecorderField: View {
+        @ObservedObject var settings = AppSettings.shared
+        @State private var isListening = false
+        @State private var monitor: Any?
+
+        var body: some View {
+            Button(action: { isListening ? stopListening() : startListening() }) {
+                Text(isListening ? "Press shortcut…" : settings.hotKeyDisplay)
+                    .font(.system(size: 11, design: isListening ? .default : .monospaced))
+                    .frame(width: 150)
+            }
+            .onDisappear { stopListening() }
+        }
+
+        private func startListening() {
+            isListening = true
+            monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+                defer { stopListening() }
+                if event.keyCode == 53 { // Esc cancels
+                    return nil
+                }
+                let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
+                if event.keyCode == 51, modifiers.isEmpty { // Delete clears
+                    settings.hotKeyKeyCode = -1
+                    settings.hotKeyModifiers = 0
+                    return nil
+                }
+                // Require a real modifier so plain typing can't be hijacked.
+                guard !modifiers.isEmpty, !modifiers.subtracting([.shift]).isEmpty else {
+                    return nil
+                }
+                settings.hotKeyKeyCode = Int(event.keyCode)
+                settings.hotKeyModifiers = Int(modifiers.rawValue)
+                return nil
+            }
+        }
+
+        private func stopListening() {
+            if let monitor { NSEvent.removeMonitor(monitor) }
+            monitor = nil
+            isListening = false
         }
     }
 

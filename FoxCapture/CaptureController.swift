@@ -46,9 +46,64 @@ final class CaptureController: NSObject, ObservableObject {
 
     var store: CaptureStore { CaptureStore(directory: settings.outputDirectory) }
 
+    private var cancellables: Set<AnyCancellable> = []
+
     override init() {
         super.init()
         captures = store.list()
+
+        HotKeyManager.shared.onHotKey = { [weak self] in self?.hotKeyToggle() }
+        registerHotKey()
+        settings.$hotKeyKeyCode
+            .combineLatest(settings.$hotKeyModifiers)
+            .dropFirst()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _, _ in self?.registerHotKey() }
+            .store(in: &cancellables)
+    }
+
+    private func registerHotKey() {
+        HotKeyManager.shared.register(
+            keyCode: settings.hotKeyKeyCode,
+            modifierFlags: NSEvent.ModifierFlags(rawValue: UInt(settings.hotKeyModifiers))
+        )
+    }
+
+    /// Global shortcut: starts (skipping confirmation — the chord is the
+    /// confirmation) or stops, and confirms a pending confirmation.
+    private func hotKeyToggle() {
+        switch state {
+        case .recording:
+            stop()
+        case .confirming:
+            confirmStart()
+        case .idle:
+            startFromHotKey()
+        case .selecting, .finishing:
+            break
+        }
+    }
+
+    private func startFromHotKey() {
+        NotificationCenter.default.post(name: .dismissPopover, object: nil)
+        switch settings.hotKeyAction {
+        case "area":
+            state = .selecting
+            overlay.begin { [weak self] screen, rect in
+                guard let self else { return }
+                guard let rect else {
+                    self.state = .idle
+                    return
+                }
+                Task { await self.begin(screen: screen, areaViewRect: rect) }
+            }
+        case "webcam":
+            guard let screen = screenUnderMouse() else { return }
+            Task { await self.beginWebcam(on: screen) }
+        default:
+            guard let screen = screenUnderMouse() else { return }
+            Task { await self.begin(screen: screen, areaViewRect: nil) }
+        }
     }
 
     // MARK: - Entry points

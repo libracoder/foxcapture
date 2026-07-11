@@ -67,6 +67,26 @@ final class AppSettings: ObservableObject {
     @Published var webcamBubbleSize: Int {
         didSet { UserDefaults.standard.set(webcamBubbleSize, forKey: "webcamBubbleSize") }
     }
+    @Published var hotKeyKeyCode: Int {
+        didSet { UserDefaults.standard.set(hotKeyKeyCode, forKey: "hotKeyKeyCode") }
+    }
+    @Published var hotKeyModifiers: Int {
+        didSet { UserDefaults.standard.set(hotKeyModifiers, forKey: "hotKeyModifiers") }
+    }
+    @Published var hotKeyAction: String {
+        didSet { UserDefaults.standard.set(hotKeyAction, forKey: "hotKeyAction") }
+    }
+
+    var hotKeyDisplay: String {
+        guard hotKeyKeyCode >= 0 else { return "Click to set shortcut" }
+        let flags = NSEvent.ModifierFlags(rawValue: UInt(hotKeyModifiers))
+        var text = ""
+        if flags.contains(.control) { text += "⌃" }
+        if flags.contains(.option) { text += "⌥" }
+        if flags.contains(.shift) { text += "⇧" }
+        if flags.contains(.command) { text += "⌘" }
+        return text + KeyCodeNames.name(for: hotKeyKeyCode)
+    }
 
     static let colorNames = ["yellow", "pink", "green", "red", "blue", "orange"]
 
@@ -120,7 +140,10 @@ final class AppSettings: ObservableObject {
             "clickSoundLeft": false,
             "clickSoundRight": false,
             "webcamOverlay": false,
-            "webcamBubbleSize": 220
+            "webcamBubbleSize": 220,
+            "hotKeyKeyCode": -1,
+            "hotKeyModifiers": 0,
+            "hotKeyAction": "screen"
         ])
         fps = defaults.integer(forKey: "fps")
         codec = defaults.string(forKey: "codec") ?? "h264"
@@ -142,5 +165,8 @@ final class AppSettings: ObservableObject {
         clickSoundRight = defaults.bool(forKey: "clickSoundRight")
         webcamOverlay = defaults.bool(forKey: "webcamOverlay")
         webcamBubbleSize = defaults.integer(forKey: "webcamBubbleSize")
+        hotKeyKeyCode = defaults.object(forKey: "hotKeyKeyCode") as? Int ?? -1
+        hotKeyModifiers = defaults.integer(forKey: "hotKeyModifiers")
+        hotKeyAction = defaults.string(forKey: "hotKeyAction") ?? "screen"
     }
 }
