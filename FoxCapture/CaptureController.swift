@@ -25,6 +25,7 @@ final class CaptureController: NSObject, ObservableObject {
     private let recordingMask = RecordingMaskController()
     private let cursorHighlight = CursorHighlightController()
     private let clickEffects = ClickEffectController()
+    private let webcam = WebcamController()
     private var stream: SCStream?
     private var recordingOutput: SCRecordingOutput?
     private var timer: Timer?
@@ -77,7 +78,7 @@ final class CaptureController: NSObject, ObservableObject {
     }
 
     func stop() {
-        guard state == .recording, let stream else { return }
+        guard state == .recording else { return }
         state = .finishing
         recordingMask.hide()
         cursorHighlight.hide()
@@ -85,17 +86,68 @@ final class CaptureController: NSObject, ObservableObject {
         timer?.invalidate()
         timer = nil
 
+        let stream = self.stream
         Task {
-            try? await stream.stopCapture()
-            // Give the recording output a moment to finalize the file.
-            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-                self.finishContinuation = continuation
-                DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
-                    self.finishContinuation?.resume()
-                    self.finishContinuation = nil
+            if let stream {
+                try? await stream.stopCapture()
+                // Give the recording output a moment to finalize the file.
+                await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                    self.finishContinuation = continuation
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                        self.finishContinuation?.resume()
+                        self.finishContinuation = nil
+                    }
                 }
             }
+            await self.webcam.stopAll()
             await MainActor.run { self.finishSession() }
+        }
+    }
+
+    /// Records just the camera to a file, with the bubble as a self-monitor.
+    func recordWebcam() {
+        guard state == .idle else { return }
+        NotificationCenter.default.post(name: .dismissPopover, object: nil)
+        Task { await beginWebcam() }
+    }
+
+    private func beginWebcam() async {
+        do {
+            guard await AVCaptureDevice.requestAccess(for: .video) else {
+                throw CaptureError.cameraDenied
+            }
+            if settings.micEnabled {
+                _ = await AVCaptureDevice.requestAccess(for: .audio)
+            }
+            let mouse = NSEvent.mouseLocation
+            let screen = NSScreen.screens.first { $0.frame.contains(mouse) } ?? NSScreen.main
+            guard let screen else { throw CaptureError.displayNotFound }
+
+            let url = store.newCaptureURL(suffix: "Webcam", fileExtension: "mov")
+            try await webcam.startRecording(
+                to: url,
+                withAudio: settings.micEnabled,
+                region: screen.visibleFrame,
+                diameter: CGFloat(settings.webcamBubbleSize)
+            )
+            currentURL = url
+            startedAt = Date()
+
+            await MainActor.run {
+                self.errorMessage = nil
+                self.elapsed = 0
+                self.state = .recording
+                self.timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+                    guard let self, let startedAt = self.startedAt else { return }
+                    self.elapsed = Date().timeIntervalSince(startedAt)
+                }
+            }
+        } catch {
+            await webcam.stopAll()
+            await MainActor.run {
+                self.state = .idle
+                self.errorMessage = Self.describe(error)
+            }
         }
     }
 
@@ -117,6 +169,11 @@ final class CaptureController: NSObject, ObservableObject {
                 if !granted {
                     settings.micEnabled = false
                 }
+            }
+            // Ask for camera access up front so the permission dialog does
+            // not appear inside the recording.
+            if settings.webcamOverlay {
+                _ = await AVCaptureDevice.requestAccess(for: .video)
             }
 
             // The mask goes up BEFORE the shareable-content fetch so it can be
@@ -206,6 +263,23 @@ final class CaptureController: NSObject, ObservableObject {
                     self.elapsed = Date().timeIntervalSince(startedAt)
                 }
             }
+
+            // The PiP bubble goes up after the capture started, so it is in
+            // the video (our windows that existed earlier are excluded).
+            if settings.webcamOverlay, AVCaptureDevice.authorizationStatus(for: .video) == .authorized {
+                let region: CGRect
+                if let rect = areaViewRect {
+                    region = CGRect(
+                        x: screen.frame.minX + rect.minX,
+                        y: screen.frame.minY + rect.minY,
+                        width: rect.width,
+                        height: rect.height
+                    )
+                } else {
+                    region = screen.visibleFrame
+                }
+                try? await webcam.startPreview(region: region, diameter: CGFloat(settings.webcamBubbleSize))
+            }
         } catch {
             await MainActor.run {
                 self.recordingMask.hide()
@@ -244,11 +318,17 @@ final class CaptureController: NSObject, ObservableObject {
 
 enum CaptureError: LocalizedError {
     case displayNotFound
+    case noCamera
+    case cameraDenied
 
     var errorDescription: String? {
         switch self {
         case .displayNotFound:
             return "Could not match the selected screen to a display."
+        case .noCamera:
+            return "No camera was found on this Mac."
+        case .cameraDenied:
+            return "Camera access was denied. Enable it in System Settings → Privacy & Security → Camera."
         }
     }
 }

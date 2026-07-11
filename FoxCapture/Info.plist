@@ -22,5 +22,7 @@
     <string>AppIcon</string>
     <key>NSMicrophoneUsageDescription</key>
     <string>FoxCapture can include your microphone narration in screen recordings.</string>
+    <key>NSCameraUsageDescription</key>
+    <string>FoxCapture can record your webcam and show it as a bubble in screen recordings.</string>
 </dict>
 </plist>

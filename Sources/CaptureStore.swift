@@ -29,8 +29,9 @@ public final class CaptureStore {
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     }
 
-    public func newCaptureURL(date: Date = Date()) -> URL {
-        directory.appendingPathComponent("FoxCapture \(Self.nameFormatter.string(from: date)).mp4")
+    public func newCaptureURL(date: Date = Date(), suffix: String = "", fileExtension: String = "mp4") -> URL {
+        let name = suffix.isEmpty ? "FoxCapture" : "FoxCapture \(suffix)"
+        return directory.appendingPathComponent("\(name) \(Self.nameFormatter.string(from: date)).\(fileExtension)")
     }
 
     public func list() -> [Capture] {

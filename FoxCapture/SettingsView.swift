@@ -20,6 +20,8 @@ struct SettingsView: View {
                     Divider()
                     mouseSection
                     Divider()
+                    webcamSection
+                    Divider()
                     outputSection
                     Divider()
                     permissionsSection
@@ -242,6 +244,33 @@ struct SettingsView: View {
         }
         .labelsHidden()
         .frame(width: 90)
+    }
+
+    private var webcamSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Webcam")
+                .font(.system(size: 12, weight: .semibold))
+            Toggle("Show webcam bubble in screen recordings", isOn: $settings.webcamOverlay)
+                .font(.system(size: 12))
+                .toggleStyle(.checkbox)
+            HStack(spacing: 8) {
+                Text("Bubble size")
+                Picker("", selection: $settings.webcamBubbleSize) {
+                    Text("Small").tag(160)
+                    Text("Medium").tag(220)
+                    Text("Large").tag(300)
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .frame(width: 100)
+            }
+            .font(.system(size: 11))
+            Text("The bubble is draggable while recording and is captured in the video. Record Webcam uses it as a self-monitor and saves the raw camera feed.")
+                .font(.system(size: 10))
+                .foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .disabled(controller.state != .idle)
     }
 
     private var outputSection: some View {

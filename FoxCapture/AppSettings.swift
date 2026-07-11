@@ -61,6 +61,12 @@ final class AppSettings: ObservableObject {
     @Published var clickSoundRight: Bool {
         didSet { UserDefaults.standard.set(clickSoundRight, forKey: "clickSoundRight") }
     }
+    @Published var webcamOverlay: Bool {
+        didSet { UserDefaults.standard.set(webcamOverlay, forKey: "webcamOverlay") }
+    }
+    @Published var webcamBubbleSize: Int {
+        didSet { UserDefaults.standard.set(webcamBubbleSize, forKey: "webcamBubbleSize") }
+    }
 
     static let colorNames = ["yellow", "pink", "green", "red", "blue", "orange"]
 
@@ -112,7 +118,9 @@ final class AppSettings: ObservableObject {
             "clickLeftColor": "green",
             "clickRightColor": "red",
             "clickSoundLeft": false,
-            "clickSoundRight": false
+            "clickSoundRight": false,
+            "webcamOverlay": false,
+            "webcamBubbleSize": 220
         ])
         fps = defaults.integer(forKey: "fps")
         codec = defaults.string(forKey: "codec") ?? "h264"
@@ -132,5 +140,7 @@ final class AppSettings: ObservableObject {
         clickRightColor = defaults.string(forKey: "clickRightColor") ?? "red"
         clickSoundLeft = defaults.bool(forKey: "clickSoundLeft")
         clickSoundRight = defaults.bool(forKey: "clickSoundRight")
+        webcamOverlay = defaults.bool(forKey: "webcamOverlay")
+        webcamBubbleSize = defaults.integer(forKey: "webcamBubbleSize")
     }
 }

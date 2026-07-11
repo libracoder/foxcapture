@@ -75,6 +75,16 @@ final class CaptureStoreTests: XCTestCase {
         XCTAssertEqual(url.deletingLastPathComponent().path, tempDir.path)
     }
 
+    func testNewCaptureURLSupportsSuffixAndExtension() {
+        let url = store.newCaptureURL(
+            date: Date(timeIntervalSince1970: 1_760_000_000),
+            suffix: "Webcam",
+            fileExtension: "mov"
+        )
+        XCTAssertEqual(url.pathExtension, "mov")
+        XCTAssertTrue(url.lastPathComponent.hasPrefix("FoxCapture Webcam "))
+    }
+
     func testListFindsOnlyVideosSortedNewestFirst() throws {
         try Data([1]).write(to: tempDir.appendingPathComponent("old.mp4"))
         Thread.sleep(forTimeInterval: 0.02)

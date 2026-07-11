@@ -60,9 +60,9 @@ struct MainView: View {
             } else {
                 HStack(spacing: 8) {
                     Button(action: { controller.recordArea() }) {
-                        HStack(spacing: 6) {
+                        HStack(spacing: 5) {
                             Image(systemName: "rectangle.dashed")
-                            Text("Record Area")
+                            Text("Area")
                                 .font(.system(size: 12, weight: .semibold))
                         }
                         .frame(maxWidth: .infinity)
@@ -72,9 +72,21 @@ struct MainView: View {
                     .disabled(controller.state != .idle)
 
                     Button(action: { controller.recordFullScreen() }) {
-                        HStack(spacing: 6) {
+                        HStack(spacing: 5) {
                             Image(systemName: "display")
-                            Text("Record Screen")
+                            Text("Screen")
+                                .font(.system(size: 12, weight: .semibold))
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 6)
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(controller.state != .idle)
+
+                    Button(action: { controller.recordWebcam() }) {
+                        HStack(spacing: 5) {
+                            Image(systemName: "camera")
+                            Text("Webcam")
                                 .font(.system(size: 12, weight: .semibold))
                         }
                         .frame(maxWidth: .infinity)
@@ -85,11 +97,17 @@ struct MainView: View {
                 }
             }
 
-            HStack(spacing: 14) {
-                Toggle("System Audio", isOn: $settings.systemAudio)
-                Toggle("Microphone", isOn: $settings.micEnabled)
-                Toggle("Cursor", isOn: $settings.showsCursor)
-                Spacer()
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 14) {
+                    Toggle("System Audio", isOn: $settings.systemAudio)
+                    Toggle("Microphone", isOn: $settings.micEnabled)
+                    Spacer()
+                }
+                HStack(spacing: 14) {
+                    Toggle("Cursor", isOn: $settings.showsCursor)
+                    Toggle("Webcam bubble", isOn: $settings.webcamOverlay)
+                    Spacer()
+                }
             }
             .font(.system(size: 11))
             .toggleStyle(.checkbox)
