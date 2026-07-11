@@ -72,19 +72,32 @@ final class CursorHighlightView: NSView {
     }
 }
 
-/// A colored burst at the click point — one color for left clicks, another
-/// for right clicks. Uses global+local event monitors, which for mouse
-/// events need no extra permissions.
+/// A colored burst and/or sound at the click point — one color/sound for
+/// left clicks, another for right clicks. Uses global+local event monitors,
+/// which for mouse events need no extra permissions.
 final class ClickEffectController {
     private var monitors: [Any] = []
     private var leftColor = NSColor.systemGreen
     private var rightColor = NSColor.systemRed
     private var diameter: CGFloat = 55
+    private var showsVisual = true
+    private var leftSound: NSSound?
+    private var rightSound: NSSound?
 
-    func start(leftColor: NSColor, rightColor: NSColor, sizePercent: Int) {
+    func start(
+        leftColor: NSColor,
+        rightColor: NSColor,
+        sizePercent: Int,
+        visual: Bool,
+        leftClickSound: Bool,
+        rightClickSound: Bool
+    ) {
         stop()
         self.leftColor = leftColor
         self.rightColor = rightColor
+        showsVisual = visual
+        leftSound = leftClickSound ? Self.sound(named: "Tink") : nil
+        rightSound = rightClickSound ? Self.sound(named: "Pop") : nil
         diameter = 55 * CGFloat(sizePercent) / 100
 
         let global = NSEvent.addGlobalMonitorForEvents(
@@ -106,9 +119,22 @@ final class ClickEffectController {
     func stop() {
         monitors.forEach { NSEvent.removeMonitor($0) }
         monitors.removeAll()
+        leftSound = nil
+        rightSound = nil
+    }
+
+    private static func sound(named name: String) -> NSSound? {
+        let sound = NSSound(named: NSSound.Name(name))
+        sound?.volume = 0.7
+        return sound
     }
 
     private func burst(for type: NSEvent.EventType) {
+        if let sound = type == .rightMouseDown ? rightSound : leftSound {
+            if sound.isPlaying { sound.stop() }
+            sound.play()
+        }
+        guard showsVisual else { return }
         let color = type == .rightMouseDown ? rightColor : leftColor
         let mouse = NSEvent.mouseLocation
         let window = CursorHighlightController.effectWindow(size: diameter)

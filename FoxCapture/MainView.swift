@@ -23,7 +23,7 @@ struct MainView: View {
             Divider()
             historySection
         }
-        .frame(width: 360, height: 480)
+        .frame(width: 380, height: 500)
     }
 
     private var header: some View {

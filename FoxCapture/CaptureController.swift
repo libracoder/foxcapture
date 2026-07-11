@@ -157,7 +157,9 @@ final class CaptureController: NSObject, ObservableObject {
             configuration.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(settings.fps))
             configuration.showsCursor = settings.showsCursor
             configuration.capturesAudio = settings.systemAudio
-            configuration.excludesCurrentProcessAudio = true
+            // Click sounds are played by this process; include our audio in
+            // the capture when they are on so viewers hear the clicks too.
+            configuration.excludesCurrentProcessAudio = !(settings.clickSoundLeft || settings.clickSoundRight)
             configuration.captureMicrophone = settings.micEnabled
             configuration.pixelFormat = kCVPixelFormatType_32BGRA
             configuration.scalesToFit = true
@@ -189,11 +191,14 @@ final class CaptureController: NSObject, ObservableObject {
                         opacityPercent: self.settings.highlightOpacity
                     )
                 }
-                if self.settings.clickEffectEnabled {
+                if self.settings.clickEffectEnabled || self.settings.clickSoundLeft || self.settings.clickSoundRight {
                     self.clickEffects.start(
                         leftColor: AppSettings.color(named: self.settings.clickLeftColor),
                         rightColor: AppSettings.color(named: self.settings.clickRightColor),
-                        sizePercent: self.settings.clickEffectSize
+                        sizePercent: self.settings.clickEffectSize,
+                        visual: self.settings.clickEffectEnabled,
+                        leftClickSound: self.settings.clickSoundLeft,
+                        rightClickSound: self.settings.clickSoundRight
                     )
                 }
                 self.timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in

@@ -55,6 +55,12 @@ final class AppSettings: ObservableObject {
     @Published var clickRightColor: String {
         didSet { UserDefaults.standard.set(clickRightColor, forKey: "clickRightColor") }
     }
+    @Published var clickSoundLeft: Bool {
+        didSet { UserDefaults.standard.set(clickSoundLeft, forKey: "clickSoundLeft") }
+    }
+    @Published var clickSoundRight: Bool {
+        didSet { UserDefaults.standard.set(clickSoundRight, forKey: "clickSoundRight") }
+    }
 
     static let colorNames = ["yellow", "pink", "green", "red", "blue", "orange"]
 
@@ -104,7 +110,9 @@ final class AppSettings: ObservableObject {
             "clickEffectEnabled": true,
             "clickEffectSize": 100,
             "clickLeftColor": "green",
-            "clickRightColor": "red"
+            "clickRightColor": "red",
+            "clickSoundLeft": false,
+            "clickSoundRight": false
         ])
         fps = defaults.integer(forKey: "fps")
         codec = defaults.string(forKey: "codec") ?? "h264"
@@ -122,5 +130,7 @@ final class AppSettings: ObservableObject {
         clickEffectSize = defaults.integer(forKey: "clickEffectSize")
         clickLeftColor = defaults.string(forKey: "clickLeftColor") ?? "green"
         clickRightColor = defaults.string(forKey: "clickRightColor") ?? "red"
+        clickSoundLeft = defaults.bool(forKey: "clickSoundLeft")
+        clickSoundRight = defaults.bool(forKey: "clickSoundRight")
     }
 }

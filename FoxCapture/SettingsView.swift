@@ -44,7 +44,7 @@ struct SettingsView: View {
                 .padding(12)
             }
         }
-        .frame(width: 360, height: 480)
+        .frame(width: 380, height: 500)
     }
 
     private var header: some View {
@@ -99,27 +99,36 @@ struct SettingsView: View {
     }
 
     private var videoSection: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 8) {
             Text("Video")
                 .font(.system(size: 12, weight: .semibold))
-            Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 8) {
+            Grid(alignment: .leading, horizontalSpacing: 8, verticalSpacing: 8) {
                 GridRow {
-                    Picker("Frame rate", selection: $settings.fps) {
+                    Text("Frame rate")
+                    Picker("", selection: $settings.fps) {
                         Text("30 fps").tag(30)
                         Text("60 fps").tag(60)
                     }
-                    Picker("Codec", selection: $settings.codec) {
+                    .labelsHidden()
+                    .frame(width: 92)
+                    Text("Codec")
+                    Picker("", selection: $settings.codec) {
                         Text("H.264").tag("h264")
                         Text("HEVC").tag("hevc")
                     }
+                    .labelsHidden()
+                    .frame(width: 92)
                 }
                 GridRow {
-                    Picker("Resolution", selection: $settings.resolution) {
+                    Text("Resolution")
+                    Picker("", selection: $settings.resolution) {
                         Text("Native (Retina)").tag("native")
                         Text("Standard (1×)").tag("standard")
                         Text("Half (0.5×)").tag("half")
                     }
-                    .gridCellColumns(2)
+                    .labelsHidden()
+                    .frame(width: 150)
+                    .gridCellColumns(3)
                 }
             }
             .font(.system(size: 11))
@@ -145,24 +154,30 @@ struct SettingsView: View {
                 .font(.system(size: 12))
                 .toggleStyle(.checkbox)
             if settings.highlightEnabled {
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack(spacing: 12) {
-                        colorPicker("Color", selection: $settings.highlightColor)
-                        Picker("Size", selection: $settings.highlightSize) {
+                Grid(alignment: .leading, horizontalSpacing: 8, verticalSpacing: 6) {
+                    GridRow {
+                        Text("Color")
+                        colorPicker(selection: $settings.highlightColor)
+                        Text("Size")
+                        Picker("", selection: $settings.highlightSize) {
                             Text("75%").tag(75)
                             Text("100%").tag(100)
                             Text("150%").tag(150)
                             Text("200%").tag(200)
                         }
-                        .frame(width: 110)
+                        .labelsHidden()
+                        .frame(width: 82)
                     }
-                    HStack(spacing: 8) {
+                    GridRow {
                         Text("Opacity")
-                        Slider(value: $settings.highlightOpacity, in: 10...90)
-                            .frame(width: 140)
-                        Text("\(Int(settings.highlightOpacity))%")
-                            .font(.system(size: 10, design: .monospaced))
-                            .foregroundColor(.secondary)
+                        HStack(spacing: 6) {
+                            Slider(value: $settings.highlightOpacity, in: 10...90)
+                                .frame(width: 130)
+                            Text("\(Int(settings.highlightOpacity))%")
+                                .font(.system(size: 10, design: .monospaced))
+                                .foregroundColor(.secondary)
+                        }
+                        .gridCellColumns(3)
                     }
                 }
                 .font(.system(size: 11))
@@ -173,30 +188,48 @@ struct SettingsView: View {
                 .font(.system(size: 12))
                 .toggleStyle(.checkbox)
             if settings.clickEffectEnabled {
-                HStack(spacing: 12) {
-                    colorPicker("Left click", selection: $settings.clickLeftColor)
-                    colorPicker("Right click", selection: $settings.clickRightColor)
-                    Picker("Size", selection: $settings.clickEffectSize) {
-                        Text("75%").tag(75)
-                        Text("100%").tag(100)
-                        Text("150%").tag(150)
+                Grid(alignment: .leading, horizontalSpacing: 8, verticalSpacing: 6) {
+                    GridRow {
+                        Text("Left click")
+                        colorPicker(selection: $settings.clickLeftColor)
+                        Text("Right click")
+                        colorPicker(selection: $settings.clickRightColor)
                     }
-                    .frame(width: 105)
+                    GridRow {
+                        Text("Size")
+                        Picker("", selection: $settings.clickEffectSize) {
+                            Text("75%").tag(75)
+                            Text("100%").tag(100)
+                            Text("150%").tag(150)
+                        }
+                        .labelsHidden()
+                        .frame(width: 82)
+                    }
                 }
                 .font(.system(size: 11))
                 .padding(.leading, 18)
             }
 
-            Text("Effects follow the pointer during recording and are captured in the video.")
+            HStack(spacing: 14) {
+                Text("Click sounds")
+                    .font(.system(size: 12))
+                Toggle("Left click", isOn: $settings.clickSoundLeft)
+                Toggle("Right click", isOn: $settings.clickSoundRight)
+            }
+            .font(.system(size: 11))
+            .toggleStyle(.checkbox)
+
+            Text("Effects follow the pointer during recording and are captured in the video. Click sounds play while recording and are recorded when System Audio is on.")
                 .font(.system(size: 10))
                 .foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .pickerStyle(.menu)
         .disabled(controller.state != .idle)
     }
 
-    private func colorPicker(_ label: String, selection: Binding<String>) -> some View {
-        Picker(label, selection: selection) {
+    private func colorPicker(selection: Binding<String>) -> some View {
+        Picker("", selection: selection) {
             ForEach(AppSettings.colorNames, id: \.self) { name in
                 HStack {
                     Circle()
@@ -207,7 +240,8 @@ struct SettingsView: View {
                 .tag(name)
             }
         }
-        .frame(width: 130)
+        .labelsHidden()
+        .frame(width: 90)
     }
 
     private var outputSection: some View {
