@@ -3,10 +3,17 @@ set -e
 
 cd "$(dirname "$0")"
 
-echo "Building FoxCapture..."
-swift build -c release
+# FOX_ARCHS="arm64 x86_64" builds a universal binary (CI does this);
+# unset it for a faster host-only development build.
+ARCH_FLAGS=""
+for arch in ${FOX_ARCHS:-}; do
+    ARCH_FLAGS="$ARCH_FLAGS --arch $arch"
+done
 
-BIN_DIR=$(swift build -c release --show-bin-path)
+echo "Building FoxCapture${FOX_ARCHS:+ ($FOX_ARCHS)}..."
+swift build -c release $ARCH_FLAGS
+
+BIN_DIR=$(swift build -c release $ARCH_FLAGS --show-bin-path)
 
 rm -rf build/FoxCapture.app
 mkdir -p build/FoxCapture.app/Contents/{MacOS,Resources}

@@ -1,0 +1,47 @@
+name: Build DMG
+
+on:
+  push:
+    branches: [main, master]
+    tags: ['v*']
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-15
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show Swift version
+        run: swift --version
+
+      - name: Test
+        run: swift test
+
+      - name: Build universal app bundle (arm64 + x86_64)
+        run: FOX_ARCHS="arm64 x86_64" ./build.sh
+
+      - name: Verify architectures
+        run: lipo -info build/FoxCapture.app/Contents/MacOS/FoxCapture
+
+      - name: Create DMG
+        env:
+          VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || github.sha }}
+        run: ./package-dmg.sh
+
+      - name: Upload DMG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: FoxCapture-dmg
+          path: build/*.dmg
+
+      - name: Attach DMG to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: build/*.dmg
