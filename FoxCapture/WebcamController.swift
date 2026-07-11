@@ -34,6 +34,14 @@ final class WebcamController: NSObject, AVCaptureFileOutputRecordingDelegate {
         output.startRecording(to: url, recordingDelegate: self)
     }
 
+    func pauseRecording() {
+        movieOutput?.pauseRecording()
+    }
+
+    func resumeRecording() {
+        movieOutput?.resumeRecording()
+    }
+
     /// Stops any recording (waiting for the file to finalize), the session,
     /// and the bubble. Safe to call when nothing is running.
     func stopAll() async {

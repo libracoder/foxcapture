@@ -64,18 +64,33 @@ struct MainView: View {
                     .keyboardShortcut(.defaultAction)
                 }
                 .font(.system(size: 12))
-            } else if controller.state == .recording {
-                Button(action: { controller.stop() }) {
-                    HStack(spacing: 6) {
-                        Image(systemName: "stop.fill")
-                        Text("Stop Recording  \(AppDelegate.format(controller.elapsed))")
-                            .font(.system(size: 12, weight: .semibold, design: .monospaced))
+            } else if controller.state == .recording || controller.state == .paused {
+                HStack(spacing: 8) {
+                    Button(action: {
+                        controller.state == .paused ? controller.resume() : controller.pause()
+                    }) {
+                        HStack(spacing: 6) {
+                            Image(systemName: controller.state == .paused ? "play.fill" : "pause.fill")
+                            Text(controller.state == .paused ? "Continue" : "Pause")
+                                .font(.system(size: 12, weight: .semibold))
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 6)
                     }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 6)
+                    .buttonStyle(.bordered)
+
+                    Button(action: { controller.stop() }) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "stop.fill")
+                            Text("Stop  \(AppDelegate.format(controller.elapsed))")
+                                .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 6)
+                    }
+                    .tint(.red)
+                    .buttonStyle(.borderedProminent)
                 }
-                .tint(.red)
-                .buttonStyle(.borderedProminent)
             } else {
                 HStack(spacing: 8) {
                     Button(action: { controller.recordArea() }) {

@@ -68,6 +68,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         case .recording:
             button.image = Self.icon(named: "record.circle.fill", color: .systemRed)
             button.title = " " + Self.format(elapsed)
+        case .paused:
+            button.image = Self.icon(named: "pause.circle.fill", color: .systemOrange)
+            button.title = " " + Self.format(elapsed)
         case .selecting, .confirming, .finishing:
             button.image = Self.icon(named: "rectangle.dashed")
             button.title = ""

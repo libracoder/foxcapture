@@ -12,6 +12,7 @@ final class CaptureController: NSObject, ObservableObject {
         case selecting
         case confirming
         case recording
+        case paused
         case finishing
     }
 
@@ -37,12 +38,21 @@ final class CaptureController: NSObject, ObservableObject {
     private let clickEffects = ClickEffectController()
     private let webcam = WebcamController()
     private let confirmPanel = ConfirmPanelController()
+    private let controlBar = ControlBarController()
     private var stream: SCStream?
     private var recordingOutput: SCRecordingOutput?
     private var timer: Timer?
     private var startedAt: Date?
     private var currentURL: URL?
     private var finishContinuation: CheckedContinuation<Void, Never>?
+
+    // Pause/resume: each pause finalizes a segment file; stop stitches the
+    // segments losslessly into the final MP4.
+    private var sessionID = UUID()
+    private var segments: [URL] = []
+    private var segmentIndex = 0
+    private var finalURL: URL?
+    private var accumulated: TimeInterval = 0
 
     var store: CaptureStore { CaptureStore(directory: settings.outputDirectory) }
 
@@ -73,7 +83,7 @@ final class CaptureController: NSObject, ObservableObject {
     /// confirmation) or stops, and confirms a pending confirmation.
     private func hotKeyToggle() {
         switch state {
-        case .recording:
+        case .recording, .paused:
             stop()
         case .confirming:
             confirmStart()
@@ -95,6 +105,7 @@ final class CaptureController: NSObject, ObservableObject {
                     self.state = .idle
                     return
                 }
+                self.controlBar.show(on: screen, nearSelection: rect, controller: self)
                 Task { await self.begin(screen: screen, areaViewRect: rect) }
             }
         case "webcam":
@@ -164,6 +175,12 @@ final class CaptureController: NSObject, ObservableObject {
         Task {
             switch pending {
             case .screen(let screen, let rect):
+                if let rect {
+                    // The confirm panel's spot becomes the recording control
+                    // bar (timer, pause, stop). Shown before the capture's
+                    // exclusion snapshot, so it stays out of the video.
+                    await MainActor.run { self.controlBar.show(on: screen, nearSelection: rect, controller: self) }
+                }
                 await self.begin(screen: screen, areaViewRect: rect)
             case .webcam(let screen):
                 await self.beginWebcam(on: screen)
@@ -188,15 +205,17 @@ final class CaptureController: NSObject, ObservableObject {
     func toggle() {
         switch state {
         case .idle: recordArea()
-        case .recording: stop()
+        case .recording, .paused: stop()
         case .selecting, .confirming, .finishing: break
         }
     }
 
     func stop() {
-        guard state == .recording else { return }
+        guard state == .recording || state == .paused else { return }
+        let hasActiveOutput = state == .recording && recordingOutput != nil
         state = .finishing
         recordingMask.hide()
+        controlBar.hide()
         cursorHighlight.hide()
         clickEffects.stop()
         timer?.invalidate()
@@ -205,19 +224,77 @@ final class CaptureController: NSObject, ObservableObject {
         let stream = self.stream
         Task {
             if let stream {
-                try? await stream.stopCapture()
-                // Give the recording output a moment to finalize the file.
+                if hasActiveOutput {
+                    // Install the continuation before stopping so the
+                    // finalize callback cannot slip past it.
+                    await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                        self.finishContinuation = continuation
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
+                            self.finishContinuation?.resume()
+                            self.finishContinuation = nil
+                        }
+                        Task { try? await stream.stopCapture() }
+                    }
+                } else {
+                    try? await stream.stopCapture()
+                }
+                await self.assembleFinalFile()
+            }
+            await self.webcam.stopAll()
+            await MainActor.run { self.finishSession() }
+        }
+    }
+
+    /// Pauses without ending the session: the current segment file is
+    /// finalized while the stream keeps running (frames just go nowhere).
+    func pause() {
+        guard state == .recording else { return }
+        accumulated += startedAt.map { Date().timeIntervalSince($0) } ?? 0
+        startedAt = nil
+        state = .paused
+
+        if let stream, let output = recordingOutput {
+            recordingOutput = nil
+            Task {
                 await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
                     self.finishContinuation = continuation
+                    do {
+                        try stream.removeRecordingOutput(output)
+                    } catch {
+                        self.finishContinuation = nil
+                        continuation.resume()
+                        return
+                    }
                     DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
                         self.finishContinuation?.resume()
                         self.finishContinuation = nil
                     }
                 }
             }
-            await self.webcam.stopAll()
-            await MainActor.run { self.finishSession() }
+        } else {
+            webcam.pauseRecording()
         }
+    }
+
+    func resume() {
+        guard state == .paused else { return }
+        if let stream {
+            segmentIndex += 1
+            let url = segmentURL(segmentIndex)
+            let output = SCRecordingOutput(configuration: makeOutputConfiguration(url: url), delegate: self)
+            do {
+                try stream.addRecordingOutput(output)
+            } catch {
+                errorMessage = Self.describe(error)
+                return
+            }
+            segments.append(url)
+            recordingOutput = output
+        } else {
+            webcam.resumeRecording()
+        }
+        startedAt = Date()
+        state = .recording
     }
 
     private func beginWebcam(on screen: NSScreen) async {
@@ -237,16 +314,14 @@ final class CaptureController: NSObject, ObservableObject {
                 diameter: CGFloat(settings.webcamBubbleSize)
             )
             currentURL = url
+            accumulated = 0
             startedAt = Date()
 
             await MainActor.run {
                 self.errorMessage = nil
                 self.elapsed = 0
                 self.state = .recording
-                self.timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
-                    guard let self, let startedAt = self.startedAt else { return }
-                    self.elapsed = Date().timeIntervalSince(startedAt)
-                }
+                self.startSessionTimer()
             }
         } catch {
             await webcam.stopAll()
@@ -327,20 +402,22 @@ final class CaptureController: NSObject, ObservableObject {
             configuration.pixelFormat = kCVPixelFormatType_32BGRA
             configuration.scalesToFit = true
 
-            let url = store.newCaptureURL()
-            let outputConfiguration = SCRecordingOutputConfiguration()
-            outputConfiguration.outputURL = url
-            outputConfiguration.outputFileType = .mp4
-            outputConfiguration.videoCodecType = settings.codec == "hevc" ? .hevc : .h264
+            sessionID = UUID()
+            segmentIndex = 0
+            let firstSegment = segmentURL(0)
+            segments = [firstSegment]
+            let finalURL = store.newCaptureURL()
+            self.finalURL = finalURL
 
-            let output = SCRecordingOutput(configuration: outputConfiguration, delegate: self)
+            let output = SCRecordingOutput(configuration: makeOutputConfiguration(url: firstSegment), delegate: self)
             let stream = SCStream(filter: filter, configuration: configuration, delegate: self)
             try stream.addRecordingOutput(output)
             try await stream.startCapture()
 
             self.stream = stream
             self.recordingOutput = output
-            self.currentURL = url
+            self.currentURL = finalURL
+            self.accumulated = 0
             self.startedAt = Date()
 
             await MainActor.run {
@@ -364,10 +441,7 @@ final class CaptureController: NSObject, ObservableObject {
                         rightClickSound: self.settings.clickSoundRight
                     )
                 }
-                self.timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
-                    guard let self, let startedAt = self.startedAt else { return }
-                    self.elapsed = Date().timeIntervalSince(startedAt)
-                }
+                self.startSessionTimer()
             }
 
             // The PiP bubble goes up after the capture started, so it is in
@@ -389,6 +463,7 @@ final class CaptureController: NSObject, ObservableObject {
         } catch {
             await MainActor.run {
                 self.recordingMask.hide()
+                self.controlBar.hide()
                 self.state = .idle
                 self.errorMessage = Self.describe(error)
             }
@@ -397,11 +472,15 @@ final class CaptureController: NSObject, ObservableObject {
 
     private func finishSession() {
         recordingMask.hide()
+        controlBar.hide()
         cursorHighlight.hide()
         clickEffects.stop()
         stream = nil
         recordingOutput = nil
         startedAt = nil
+        accumulated = 0
+        finalURL = nil
+        segments = []
         elapsed = 0
         state = .idle
         captures = store.list()
@@ -411,6 +490,64 @@ final class CaptureController: NSObject, ObservableObject {
             NSWorkspace.shared.activateFileViewerSelecting([url])
         }
         currentURL = nil
+    }
+
+    // MARK: - Segments
+
+    private func segmentURL(_ index: Int) -> URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent("FoxCapture-\(sessionID.uuidString)-part\(index).mp4")
+    }
+
+    private func makeOutputConfiguration(url: URL) -> SCRecordingOutputConfiguration {
+        let configuration = SCRecordingOutputConfiguration()
+        configuration.outputURL = url
+        configuration.outputFileType = .mp4
+        configuration.videoCodecType = settings.codec == "hevc" ? .hevc : .h264
+        return configuration
+    }
+
+    /// One segment moves straight to the final name; several are stitched
+    /// losslessly (passthrough export, no re-encode).
+    private func assembleFinalFile() async {
+        guard let finalURL else { return }
+        let existing = segments.filter { FileManager.default.fileExists(atPath: $0.path) }
+        segments = []
+        if existing.count == 1 {
+            try? FileManager.default.moveItem(at: existing[0], to: finalURL)
+        } else if existing.count > 1 {
+            await Self.stitch(segments: existing, into: finalURL)
+            existing.forEach { try? FileManager.default.removeItem(at: $0) }
+        }
+    }
+
+    private static func stitch(segments: [URL], into output: URL) async {
+        let composition = AVMutableComposition()
+        var cursor = CMTime.zero
+        for url in segments {
+            let asset = AVURLAsset(url: url)
+            guard let duration = try? await asset.load(.duration), duration > .zero else { continue }
+            try? composition.insertTimeRange(CMTimeRange(start: .zero, duration: duration), of: asset, at: cursor)
+            cursor = CMTimeAdd(cursor, duration)
+        }
+        guard let session = AVAssetExportSession(asset: composition, presetName: AVAssetExportPresetPassthrough) else {
+            return
+        }
+        try? await session.export(to: output, as: .mp4)
+    }
+
+    // MARK: - Timing
+
+    private func currentElapsed() -> TimeInterval {
+        accumulated + (startedAt.map { Date().timeIntervalSince($0) } ?? 0)
+    }
+
+    private func startSessionTimer() {
+        timer?.invalidate()
+        timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            self.elapsed = self.currentElapsed()
+        }
     }
 
     private static func describe(_ error: Error) -> String {
