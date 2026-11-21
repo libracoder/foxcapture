@@ -11,10 +11,13 @@ final class ConfirmPanelController {
         nearSelection rect: CGRect?,
         title: String,
         onStart: @escaping () -> Void,
-        onCancel: @escaping () -> Void
+        onCancel: @escaping () -> Void,
+        onReselect: (() -> Void)? = nil
     ) {
         hide()
-        let hosting = NSHostingView(rootView: ConfirmPanelView(title: title, onStart: onStart, onCancel: onCancel))
+        let hosting = NSHostingView(rootView: ConfirmPanelView(
+            title: title, onStart: onStart, onCancel: onCancel, onReselect: onReselect
+        ))
         let size = hosting.fittingSize
 
         let origin: NSPoint
@@ -71,11 +74,15 @@ struct ConfirmPanelView: View {
     let title: String
     let onStart: () -> Void
     let onCancel: () -> Void
+    var onReselect: (() -> Void)?
 
     var body: some View {
         HStack(spacing: 10) {
             Text(title)
                 .font(.system(size: 12, weight: .medium))
+            if let onReselect {
+                Button("Reselect", action: onReselect)
+            }
             Button("Cancel", action: onCancel)
                 .keyboardShortcut(.cancelAction)
             Button(action: onStart) {

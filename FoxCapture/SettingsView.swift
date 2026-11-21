@@ -18,6 +18,8 @@ struct SettingsView: View {
                     Divider()
                     videoSection
                     Divider()
+                    recordingSection
+                    Divider()
                     mouseSection
                     Divider()
                     webcamSection
@@ -143,6 +145,24 @@ struct SettingsView: View {
                 .foregroundColor(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
+    }
+
+    private var recordingSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Recording")
+                .font(.system(size: 12, weight: .semibold))
+            Toggle("Remember last selected area", isOn: $settings.rememberLastArea)
+                .font(.system(size: 12))
+                .toggleStyle(.checkbox)
+            Toggle("Auto-pause after \(Int(AppSettings.silenceSeconds)) seconds of silence", isOn: $settings.pauseOnSilence)
+                .font(.system(size: 12))
+                .toggleStyle(.checkbox)
+            Text("With Remember on, Area skips the drag and shows your previous rectangle; use Reselect in the confirmation panel to pick a new one. Auto-pause watches System Audio (so it needs that on) and pauses once nothing has played for \(Int(AppSettings.silenceSeconds)) seconds; press Continue to resume.")
+                .font(.system(size: 10))
+                .foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .disabled(controller.state != .idle)
     }
 
     private var mouseSection: some View {

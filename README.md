@@ -17,6 +17,10 @@ package, a tiny menu bar app, everything stays on your machine.
 - **Straight to MP4** via ScreenCaptureKit's recording output (H.264 or HEVC,
   30 or 60 fps) — no re-encoding step, the file is ready when you stop
 - **System audio and microphone** can be muxed into the video, both optional
+- **Remember last area** (optional): Area reuses your previous rectangle —
+  confirm it, or hit Reselect to drag a new one
+- **Auto-pause on silence** (optional): pauses after 4 seconds without system
+  audio; press Continue to resume
 - **Menu bar control**: elapsed time in the bar; click the icon to stop
 - **History**: recent recordings in the popover with play / reveal / delete;
   files are plain timestamped MP4s in `~/Movies/FoxCapture` (configurable)
