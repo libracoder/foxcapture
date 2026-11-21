@@ -27,6 +27,8 @@ final class CaptureController: NSObject, ObservableObject {
     @Published var captures: [Capture] = []
     /// Set while a screen/webcam recording waits for in-popover confirmation.
     @Published var pendingTitle: String?
+    /// Why a recording is paused when FoxCapture paused it itself.
+    @Published var pauseReason: String?
 
     private var pending: PendingRecording?
 
@@ -44,7 +46,17 @@ final class CaptureController: NSObject, ObservableObject {
     private var timer: Timer?
     private var startedAt: Date?
     private var currentURL: URL?
-    private var finishContinuation: CheckedContinuation<Void, Never>?
+    /// Set (on the main queue) when SCRecordingOutput reports the file is
+    /// finalized; `stopStream` polls it.
+    private var outputDidFinish = false
+    /// A pause's segment finalization still in flight; stop waits for it.
+    private var pendingFinalize: Task<Void, Never>?
+
+    // Auto-pause on silence
+    private let silence = SilenceDetector(duration: AppSettings.silenceSeconds)
+    private let audioQueue = DispatchQueue(label: "foxcapture.audio-level")
+    private var silenceMonitoring = false
+    private var wantsSilenceMonitoring: Bool { settings.pauseOnSilence && settings.systemAudio }
 
     // Pause/resume: each pause finalizes a segment file; stop stitches the
     // segments losslessly into the final MP4.
@@ -92,7 +104,9 @@ final class CaptureController: NSObject, ObservableObject {
             confirmStart()
         case .idle:
             startFromHotKey()
-        case .selecting, .finishing:
+        case .selecting:
+            cancelSelection()
+        case .finishing:
             break
         }
     }
@@ -101,15 +115,14 @@ final class CaptureController: NSObject, ObservableObject {
         NotificationCenter.default.post(name: .dismissPopover, object: nil)
         switch settings.hotKeyAction {
         case "area":
-            state = .selecting
-            overlay.begin { [weak self] screen, rect in
-                guard let self else { return }
-                guard let rect else {
-                    self.state = .idle
-                    return
+            // The chord is the confirmation, so a remembered area starts
+            // right away; otherwise drag a new one first.
+            if settings.rememberLastArea, let (screen, rect) = rememberedSelection() {
+                startAreaRecording(screen: screen, rect: rect)
+            } else {
+                selectNewArea { [weak self] screen, rect in
+                    self?.startAreaRecording(screen: screen, rect: rect)
                 }
-                self.controlBar.show(on: screen, nearSelection: rect, controller: self)
-                Task { await self.begin(screen: screen, areaViewRect: rect) }
             }
         case "webcam":
             guard let screen = screenUnderMouse() else { return }
@@ -118,6 +131,11 @@ final class CaptureController: NSObject, ObservableObject {
             guard let screen = screenUnderMouse() else { return }
             Task { await self.begin(screen: screen, areaViewRect: nil) }
         }
+    }
+
+    private func startAreaRecording(screen: NSScreen, rect: CGRect) {
+        controlBar.show(on: screen, nearSelection: rect, controller: self)
+        Task { await self.begin(screen: screen, areaViewRect: rect) }
     }
 
     // MARK: - Entry points
@@ -130,15 +148,69 @@ final class CaptureController: NSObject, ObservableObject {
 
     func recordArea() {
         guard state == .idle else { return }
+        // With "Remember last selected area" the previous rectangle is
+        // already set: go straight to the confirmation (which has a
+        // Reselect button) instead of making the user drag it again.
+        if settings.rememberLastArea, let (screen, rect) = rememberedSelection() {
+            NotificationCenter.default.post(name: .dismissPopover, object: nil)
+            confirmArea(rect, on: screen)
+            return
+        }
+        selectNewArea { [weak self] screen, rect in
+            self?.confirmArea(rect, on: screen)
+        }
+    }
+
+    /// Shows the drag overlay. The overlay always reports back, so a cancel
+    /// (Esc, right-click, or a click without dragging) lands in `.idle`
+    /// rather than leaving the controller stuck in `.selecting`.
+    private func selectNewArea(then onSelected: @escaping (NSScreen, CGRect) -> Void) {
         state = .selecting
         NotificationCenter.default.post(name: .dismissPopover, object: nil)
         overlay.begin { [weak self] screen, rect in
             guard let self else { return }
-            guard let rect else {
+            guard let screen, let rect else {
                 self.state = .idle
                 return
             }
-            self.confirm(.screen(screen, areaViewRect: rect), title: "Record this area?", selection: rect, on: screen)
+            self.settings.lastArea = RememberedArea(rect: rect, screenFrame: screen.frame)
+            onSelected(screen, rect)
+        }
+    }
+
+    private func confirmArea(_ rect: CGRect, on screen: NSScreen) {
+        confirm(.screen(screen, areaViewRect: rect), title: "Record this area?", selection: rect, on: screen)
+    }
+
+    /// The remembered area mapped onto a connected screen, if it still fits.
+    private func rememberedSelection() -> (NSScreen, CGRect)? {
+        guard let area = settings.lastArea else { return nil }
+        let screens = NSScreen.screens
+        guard let index = area.bestScreenIndex(among: screens.map(\.frame)) else { return nil }
+        let screen = screens[index]
+        guard let rect = area.usableRect(onScreenOfSize: screen.frame.size) else { return nil }
+        return (screen, rect)
+    }
+
+    /// Abandons the drag overlay (status item click, or the hotkey again).
+    func cancelSelection() {
+        guard state == .selecting else { return }
+        if overlay.isActive {
+            overlay.cancel()   // completion moves us to .idle
+        } else {
+            state = .idle
+        }
+    }
+
+    /// From the confirmation panel: throw the current area away and drag a new one.
+    func reselectArea() {
+        guard state == .confirming else { return }
+        confirmPanel.hide()
+        recordingMask.hide()
+        pending = nil
+        pendingTitle = nil
+        selectNewArea { [weak self] screen, rect in
+            self?.confirmArea(rect, on: screen)
         }
     }
 
@@ -162,7 +234,8 @@ final class CaptureController: NSObject, ObservableObject {
                 nearSelection: selection,
                 title: title,
                 onStart: { [weak self] in self?.confirmStart() },
-                onCancel: { [weak self] in self?.cancelPending() }
+                onCancel: { [weak self] in self?.cancelPending() },
+                onReselect: { [weak self] in self?.reselectArea() }
             )
         } else {
             pendingTitle = title
@@ -209,7 +282,8 @@ final class CaptureController: NSObject, ObservableObject {
         switch state {
         case .idle: recordArea()
         case .recording, .paused: stop()
-        case .selecting, .confirming, .finishing: break
+        case .selecting: cancelSelection()
+        case .confirming, .finishing: break
         }
     }
 
@@ -217,6 +291,8 @@ final class CaptureController: NSObject, ObservableObject {
         guard state == .recording || state == .paused else { return }
         let hasActiveOutput = state == .recording && recordingOutput != nil
         state = .finishing
+        pauseReason = nil
+        silenceMonitoring = false
         recordingMask.hide()
         controlBar.hide()
         cursorHighlight.hide()
@@ -225,27 +301,43 @@ final class CaptureController: NSObject, ObservableObject {
         timer = nil
 
         let stream = self.stream
+        let finalizingPause = pendingFinalize
         Task {
+            // A pause that is still finalizing its segment must finish first.
+            await finalizingPause?.value
             if let stream {
-                if hasActiveOutput {
-                    // Install the continuation before stopping so the
-                    // finalize callback cannot slip past it.
-                    await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-                        self.finishContinuation = continuation
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
-                            self.finishContinuation?.resume()
-                            self.finishContinuation = nil
-                        }
-                        Task { try? await stream.stopCapture() }
-                    }
-                } else {
-                    try? await stream.stopCapture()
-                }
+                await self.stopStream(stream, waitForOutput: hasActiveOutput)
             }
             // Runs even when stopping while paused (stream already gone).
             await self.assembleFinalFile()
             await self.webcam.stopAll()
-            await MainActor.run { self.finishSession() }
+            await MainActor.run {
+                self.pendingFinalize = nil
+                self.finishSession()
+            }
+        }
+    }
+
+    /// Stops the stream, then waits (bounded) for the recording output to
+    /// report its file as finalized. The wait runs AFTER `stopCapture`
+    /// returns, so a slow stop can no longer be raced by a timeout.
+    private func stopStream(_ stream: SCStream, waitForOutput: Bool) async {
+        await MainActor.run { self.outputDidFinish = false }
+        do {
+            try await stream.stopCapture()
+        } catch {
+            // "Already stopped" (e.g. the system's own Stop Sharing control)
+            // is fine; anything else is worth showing.
+            if !Self.isAlreadyStopped(error) {
+                await MainActor.run {
+                    self.errorMessage = "Recording stream did not stop cleanly: \(error.localizedDescription)"
+                }
+            }
+        }
+        guard waitForOutput else { return }
+        for _ in 0..<100 { // up to ~5 s
+            if await MainActor.run(body: { self.outputDidFinish }) { return }
+            try? await Task.sleep(nanoseconds: 50_000_000)
         }
     }
 
@@ -254,6 +346,7 @@ final class CaptureController: NSObject, ObservableObject {
     /// being captured while paused.
     func pause() {
         guard state == .recording else { return }
+        pauseReason = nil
         accumulated += startedAt.map { Date().timeIntervalSince($0) } ?? 0
         startedAt = nil
         state = .paused
@@ -261,19 +354,20 @@ final class CaptureController: NSObject, ObservableObject {
         if let stream {
             self.stream = nil
             recordingOutput = nil
-            Task {
-                await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-                    self.finishContinuation = continuation
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
-                        self.finishContinuation?.resume()
-                        self.finishContinuation = nil
-                    }
-                    Task { try? await stream.stopCapture() }
-                }
-            }
+            pendingFinalize = Task { await self.stopStream(stream, waitForOutput: true) }
         } else {
             webcam.pauseRecording()
         }
+    }
+
+    /// Pauses after `AppSettings.silenceSeconds` without system audio. Checked
+    /// from the session timer, so it fires within about half a second of the
+    /// threshold.
+    private func autoPauseIfSilent() {
+        guard state == .recording, silenceMonitoring, startedAt != nil else { return }
+        guard silence.isSilent(at: ProcessInfo.processInfo.systemUptime) else { return }
+        pause()
+        pauseReason = "Auto-paused: no system audio for \(Int(AppSettings.silenceSeconds)) seconds. Press Continue to resume."
     }
 
     /// Resumes by starting a fresh capture stream into a new segment file,
@@ -295,6 +389,9 @@ final class CaptureController: NSObject, ObservableObject {
                     self.segments.append(url)
                     await MainActor.run {
                         self.startedAt = Date()
+                        self.pauseReason = nil
+                        self.silence.reset(at: ProcessInfo.processInfo.systemUptime)
+                        self.silenceMonitoring = self.wantsSilenceMonitoring
                         self.state = .recording
                     }
                 } catch {
@@ -399,6 +496,9 @@ final class CaptureController: NSObject, ObservableObject {
             await MainActor.run {
                 self.errorMessage = nil
                 self.elapsed = 0
+                self.pauseReason = nil
+                self.silence.reset(at: ProcessInfo.processInfo.systemUptime)
+                self.silenceMonitoring = self.wantsSilenceMonitoring
                 self.state = .recording
                 if self.settings.highlightEnabled {
                     self.cursorHighlight.show(
@@ -453,6 +553,8 @@ final class CaptureController: NSObject, ObservableObject {
         clickEffects.stop()
         stream = nil
         recordingOutput = nil
+        silenceMonitoring = false
+        pauseReason = nil
         startedAt = nil
         accumulated = 0
         finalURL = nil
@@ -517,7 +619,11 @@ final class CaptureController: NSObject, ObservableObject {
         configuration.pixelFormat = kCVPixelFormatType_32BGRA
         configuration.scalesToFit = true
 
-        return SCStream(filter: filter, configuration: configuration, delegate: self)
+        let stream = SCStream(filter: filter, configuration: configuration, delegate: self)
+        if wantsSilenceMonitoring {
+            try stream.addStreamOutput(self, type: .audio, sampleHandlerQueue: audioQueue)
+        }
+        return stream
     }
 
     // MARK: - Segments
@@ -536,32 +642,48 @@ final class CaptureController: NSObject, ObservableObject {
     }
 
     /// One segment moves straight to the final name; several are stitched
-    /// losslessly (passthrough export, no re-encode).
+    /// losslessly (passthrough export, no re-encode). Segments are only
+    /// deleted once the final file exists.
     private func assembleFinalFile() async {
         guard let finalURL else { return }
         let existing = segments.filter { FileManager.default.fileExists(atPath: $0.path) }
         segments = []
         if existing.count == 1 {
-            try? FileManager.default.moveItem(at: existing[0], to: finalURL)
+            do {
+                try FileManager.default.moveItem(at: existing[0], to: finalURL)
+            } catch {
+                await reportAssemblyFailure(kept: existing, error: error)
+            }
         } else if existing.count > 1 {
-            await Self.stitch(segments: existing, into: finalURL)
-            existing.forEach { try? FileManager.default.removeItem(at: $0) }
+            do {
+                try await Self.stitch(segments: existing, into: finalURL)
+                existing.forEach { try? FileManager.default.removeItem(at: $0) }
+            } catch {
+                await reportAssemblyFailure(kept: existing, error: error)
+            }
         }
     }
 
-    private static func stitch(segments: [URL], into output: URL) async {
+    private func reportAssemblyFailure(kept: [URL], error: Error) async {
+        let folder = kept.first?.deletingLastPathComponent().path ?? ""
+        await MainActor.run {
+            self.errorMessage = "Could not save the recording (\(error.localizedDescription)). The raw pieces were left in \(folder)."
+        }
+    }
+
+    private static func stitch(segments: [URL], into output: URL) async throws {
         let composition = AVMutableComposition()
         var cursor = CMTime.zero
         for url in segments {
             let asset = AVURLAsset(url: url)
             guard let duration = try? await asset.load(.duration), duration > .zero else { continue }
-            try? await composition.insertTimeRange(CMTimeRange(start: .zero, duration: duration), of: asset, at: cursor)
+            try await composition.insertTimeRange(CMTimeRange(start: .zero, duration: duration), of: asset, at: cursor)
             cursor = CMTimeAdd(cursor, duration)
         }
         guard let session = AVAssetExportSession(asset: composition, presetName: AVAssetExportPresetPassthrough) else {
-            return
+            throw CaptureError.exportUnavailable
         }
-        try? await session.export(to: output, as: .mp4)
+        try await session.export(to: output, as: .mp4)
     }
 
     // MARK: - Timing
@@ -575,7 +697,15 @@ final class CaptureController: NSObject, ObservableObject {
         timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
             guard let self else { return }
             self.elapsed = self.currentElapsed()
+            self.autoPauseIfSilent()
         }
+    }
+
+    /// Errors from stopping a stream that is already stopped (user pressed the
+    /// system's Stop Sharing, or the stream ended on its own).
+    private static func isAlreadyStopped(_ error: Error) -> Bool {
+        let ns = error as NSError
+        return ns.domain == SCStreamErrorDomain && [-3817, -3808].contains(ns.code) // userStopped, attemptToStopStreamState
     }
 
     private static func describe(_ error: Error) -> String {
@@ -591,6 +721,7 @@ enum CaptureError: LocalizedError {
     case displayNotFound
     case noCamera
     case cameraDenied
+    case exportUnavailable
 
     var errorDescription: String? {
         switch self {
@@ -600,6 +731,8 @@ enum CaptureError: LocalizedError {
             return "No camera was found on this Mac."
         case .cameraDenied:
             return "Camera access was denied. Enable it in System Settings → Privacy & Security → Camera."
+        case .exportUnavailable:
+            return "The video could not be assembled from its pieces."
         }
     }
 }
@@ -608,26 +741,36 @@ extension CaptureController: SCStreamDelegate {
     func stream(_ stream: SCStream, didStopWithError error: Error) {
         DispatchQueue.main.async {
             if self.state == .recording {
-                self.errorMessage = Self.describe(error)
+                if !Self.isAlreadyStopped(error) {
+                    self.errorMessage = Self.describe(error)
+                }
                 self.stop()
             }
         }
     }
 }
 
+extension CaptureController: SCStreamOutput {
+    /// Audio-level tap for auto-pause. Runs on `audioQueue`.
+    func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
+        guard type == .audio, sampleBuffer.isValid else { return }
+        // An unreadable format counts as sound: never auto-pause on a guess.
+        let peak = AudioLevel.peak(of: sampleBuffer) ?? 1
+        silence.record(peak: peak, at: ProcessInfo.processInfo.systemUptime)
+    }
+}
+
 extension CaptureController: SCRecordingOutputDelegate {
     func recordingOutputDidFinishRecording(_ recordingOutput: SCRecordingOutput) {
         DispatchQueue.main.async {
-            self.finishContinuation?.resume()
-            self.finishContinuation = nil
+            self.outputDidFinish = true
         }
     }
 
     func recordingOutput(_ recordingOutput: SCRecordingOutput, didFailWithError error: Error) {
         DispatchQueue.main.async {
             self.errorMessage = Self.describe(error)
-            self.finishContinuation?.resume()
-            self.finishContinuation = nil
+            self.outputDidFinish = true
             if self.state == .recording {
                 self.stop()
             }

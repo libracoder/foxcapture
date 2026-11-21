@@ -142,18 +142,30 @@ struct MainView: View {
                     Toggle("Webcam bubble", isOn: $settings.webcamOverlay)
                     Spacer()
                 }
+                HStack(spacing: 14) {
+                    Toggle("Remember last area", isOn: $settings.rememberLastArea)
+                    Toggle("Pause on silence", isOn: $settings.pauseOnSilence)
+                        .help("Pause automatically after \(Int(AppSettings.silenceSeconds)) seconds without system audio")
+                    Spacer()
+                }
             }
             .font(.system(size: 11))
             .toggleStyle(.checkbox)
             .disabled(controller.state != .idle)
 
+            if controller.state == .paused, let reason = controller.pauseReason {
+                Text(reason)
+                    .font(.system(size: 10))
+                    .foregroundColor(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             if controller.state == .selecting {
                 Text("Drag to select an area on any screen. Esc cancels.")
                     .font(.system(size: 10))
                     .foregroundColor(.secondary)
             }
             if controller.state == .confirming, controller.pendingTitle == nil {
-                Text("Confirm in the panel next to your selection: Start Recording or Cancel (Esc).")
+                Text("Confirm in the panel next to your selection: Start Recording, Reselect or Cancel (Esc).")
                     .font(.system(size: 10))
                     .foregroundColor(.secondary)
             }

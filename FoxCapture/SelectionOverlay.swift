@@ -6,10 +6,23 @@ import FoxCaptureCore
 /// screen and the selection in that screen's local AppKit coordinates.
 final class SelectionOverlayController {
     private var windows: [SelectionWindow] = []
-    private var completion: ((NSScreen, CGRect?) -> Void)?
+    private var completion: ((NSScreen?, CGRect?) -> Void)?
+    private var escMonitor: Any?
 
-    func begin(completion: @escaping (NSScreen, CGRect?) -> Void) {
-        guard windows.isEmpty else { return }
+    var isActive: Bool { completion != nil }
+
+    /// `completion` is ALWAYS called exactly once: with the chosen screen and
+    /// rect, or with `(nil, nil)` when the user cancels (Esc, right-click, or
+    /// a click without a drag). Callers rely on that to leave `.selecting`.
+    func begin(completion: @escaping (NSScreen?, CGRect?) -> Void) {
+        guard windows.isEmpty else {
+            completion(nil, nil)
+            return
+        }
+        guard !NSScreen.screens.isEmpty else {
+            completion(nil, nil)
+            return
+        }
         self.completion = completion
 
         for screen in NSScreen.screens {
@@ -25,6 +38,14 @@ final class SelectionOverlayController {
         }
         NSApp.activate(ignoringOtherApps: true)
         NSCursor.crosshair.set()
+
+        // Esc must work no matter which display's overlay happens to be the
+        // key window.
+        escMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard event.keyCode == 53 else { return event }
+            self?.finish(screen: nil, rect: nil)
+            return nil
+        }
     }
 
     func cancel() {
@@ -34,12 +55,12 @@ final class SelectionOverlayController {
     private func finish(screen: NSScreen?, rect: CGRect?) {
         let done = completion
         completion = nil
+        if let escMonitor { NSEvent.removeMonitor(escMonitor) }
+        escMonitor = nil
         windows.forEach { $0.orderOut(nil) }
         windows.removeAll()
         NSCursor.arrow.set()
-        if let screen, let done {
-            done(screen, rect)
-        }
+        done?(screen, rect)
     }
 }
 

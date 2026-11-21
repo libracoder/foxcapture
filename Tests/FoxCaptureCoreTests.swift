@@ -112,3 +112,92 @@ final class CaptureStoreTests: XCTestCase {
         }
     }
 }
+
+final class SilenceDetectorTests: XCTestCase {
+    func testNotSilentBeforeDurationElapses() {
+        let detector = SilenceDetector(duration: 4)
+        detector.reset(at: 100)
+        XCTAssertFalse(detector.isSilent(at: 103.9))
+    }
+
+    func testSilentAtExactlyDuration() {
+        let detector = SilenceDetector(duration: 4)
+        detector.reset(at: 100)
+        XCTAssertTrue(detector.isSilent(at: 104))
+        XCTAssertTrue(detector.isSilent(at: 120))
+    }
+
+    func testSoundRestartsTheCountdown() {
+        let detector = SilenceDetector(duration: 4)
+        detector.reset(at: 100)
+        detector.record(peak: 0.2, at: 103)
+        XCTAssertFalse(detector.isSilent(at: 106.9))
+        XCTAssertTrue(detector.isSilent(at: 107))
+    }
+
+    func testQuietBuffersBelowThresholdCountAsSilence() {
+        let detector = SilenceDetector(threshold: 0.001, duration: 4)
+        detector.reset(at: 100)
+        detector.record(peak: 0.0005, at: 103)
+        XCTAssertTrue(detector.isSilent(at: 104))
+    }
+
+    func testResetStartsAFreshCountdown() {
+        let detector = SilenceDetector(duration: 4)
+        detector.reset(at: 100)
+        XCTAssertTrue(detector.isSilent(at: 110))
+        detector.reset(at: 110)
+        XCTAssertFalse(detector.isSilent(at: 113))
+    }
+
+    func testLateBufferFromBeforeResetDoesNotMoveTimeBackwards() {
+        let detector = SilenceDetector(duration: 4)
+        detector.reset(at: 100)
+        detector.record(peak: 0.5, at: 90)
+        XCTAssertTrue(detector.isSilent(at: 104))
+    }
+}
+
+final class RememberedAreaTests: XCTestCase {
+    private let screen = CGRect(x: 0, y: 0, width: 1440, height: 900)
+    private let external = CGRect(x: 1440, y: 0, width: 2560, height: 1440)
+
+    func testRoundTripsThroughJSON() {
+        let area = RememberedArea(rect: CGRect(x: 100, y: 120, width: 640, height: 360), screenFrame: screen)
+        XCTAssertEqual(RememberedArea.decode(area.encoded()), area)
+    }
+
+    func testDecodeOfGarbageOrNilIsNil() {
+        XCTAssertNil(RememberedArea.decode(nil))
+        XCTAssertNil(RememberedArea.decode(Data([0x00, 0x01])))
+    }
+
+    func testPicksScreenWithIdenticalFrame() {
+        let area = RememberedArea(rect: CGRect(x: 0, y: 0, width: 100, height: 100), screenFrame: external)
+        XCTAssertEqual(area.bestScreenIndex(among: [screen, external]), 1)
+    }
+
+    func testFallsBackToScreenOfSameSizeWhenArrangementChanged() {
+        let area = RememberedArea(rect: CGRect(x: 0, y: 0, width: 100, height: 100), screenFrame: external)
+        let moved = CGRect(x: -2560, y: 0, width: 2560, height: 1440)
+        XCTAssertEqual(area.bestScreenIndex(among: [screen, moved]), 1)
+    }
+
+    func testNoScreenWhenSizeIsGone() {
+        let area = RememberedArea(rect: CGRect(x: 0, y: 0, width: 100, height: 100), screenFrame: external)
+        XCTAssertNil(area.bestScreenIndex(among: [screen]))
+    }
+
+    func testUsableRectClampsToSmallerScreen() {
+        let area = RememberedArea(rect: CGRect(x: 1000, y: 600, width: 800, height: 600), screenFrame: external)
+        XCTAssertEqual(
+            area.usableRect(onScreenOfSize: screen.size),
+            CGRect(x: 1000, y: 600, width: 440, height: 300)
+        )
+    }
+
+    func testUsableRectRejectsSliverOffScreen() {
+        let area = RememberedArea(rect: CGRect(x: 1436, y: 0, width: 400, height: 400), screenFrame: external)
+        XCTAssertNil(area.usableRect(onScreenOfSize: screen.size))
+    }
+}

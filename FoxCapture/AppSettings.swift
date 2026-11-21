@@ -1,6 +1,7 @@
 import Foundation
 import AppKit
 import Combine
+import FoxCaptureCore
 
 final class AppSettings: ObservableObject {
     static let shared = AppSettings()
@@ -23,6 +24,21 @@ final class AppSettings: ObservableObject {
     @Published var revealAfterRecording: Bool {
         didSet { UserDefaults.standard.set(revealAfterRecording, forKey: "revealAfterRecording") }
     }
+    /// Pause automatically after `silenceSeconds` of silent system audio.
+    @Published var pauseOnSilence: Bool {
+        didSet { UserDefaults.standard.set(pauseOnSilence, forKey: "pauseOnSilence") }
+    }
+    /// Clicking Area reuses the previously selected rectangle.
+    @Published var rememberLastArea: Bool {
+        didSet { UserDefaults.standard.set(rememberLastArea, forKey: "rememberLastArea") }
+    }
+    /// Last area the user selected (not published: nothing in the UI shows it).
+    var lastArea: RememberedArea? {
+        get { RememberedArea.decode(UserDefaults.standard.data(forKey: "lastArea")) }
+        set { UserDefaults.standard.set(newValue?.encoded(), forKey: "lastArea") }
+    }
+    static let silenceSeconds: TimeInterval = 4
+
     @Published var outputPath: String {
         didSet { UserDefaults.standard.set(outputPath, forKey: "outputPath") }
     }
@@ -127,6 +143,8 @@ final class AppSettings: ObservableObject {
             "systemAudio": true,
             "micEnabled": false,
             "revealAfterRecording": true,
+            "pauseOnSilence": false,
+            "rememberLastArea": false,
             "outputPath": "",
             "resolution": "native",
             "highlightEnabled": true,
@@ -151,6 +169,8 @@ final class AppSettings: ObservableObject {
         systemAudio = defaults.bool(forKey: "systemAudio")
         micEnabled = defaults.bool(forKey: "micEnabled")
         revealAfterRecording = defaults.bool(forKey: "revealAfterRecording")
+        pauseOnSilence = defaults.bool(forKey: "pauseOnSilence")
+        rememberLastArea = defaults.bool(forKey: "rememberLastArea")
         outputPath = defaults.string(forKey: "outputPath") ?? ""
         resolution = defaults.string(forKey: "resolution") ?? "native"
         highlightEnabled = defaults.bool(forKey: "highlightEnabled")

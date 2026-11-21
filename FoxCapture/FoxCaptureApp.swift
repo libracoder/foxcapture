@@ -111,9 +111,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     }
 
     @objc func togglePopover() {
-        // While recording, the status item acts as the stop button.
+        // While recording, the status item acts as the stop button; while
+        // choosing an area it cancels, so it can never be left stuck.
         if controller.state == .recording {
             controller.stop()
+            return
+        }
+        if controller.state == .selecting {
+            controller.cancelSelection()
             return
         }
         guard let button = statusItem.button else { return }
